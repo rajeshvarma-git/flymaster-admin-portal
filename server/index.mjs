@@ -7528,10 +7528,14 @@ app.get("/api/health", async (_req, res) => {
 app.post("/api/auth/signup", async (req, res) => {
   try {
     if (IS_PRODUCTION && !ADMIN_SIGNUP_OPEN) {
-      if (!ADMIN_SIGNUP_CODE || String(req.body.code || "") !== ADMIN_SIGNUP_CODE) {
+      const submitted = String(req.body.code || "");
+      if (!ADMIN_SIGNUP_CODE) {
         return res.status(403).json({
-          error: "Admin signup is closed. Ask an existing admin to create your account.",
+          error: "Admin signup is closed on this server. An admin must set ADMIN_SIGNUP_CODE in Railway variables, or create your account under Users.",
         });
+      }
+      if (submitted !== ADMIN_SIGNUP_CODE) {
+        return res.status(403).json({ error: "That signup code is not valid." });
       }
     } else if (ADMIN_SIGNUP_CODE && String(req.body.code || "") !== ADMIN_SIGNUP_CODE) {
       return res.status(403).json({ error: "That signup code is not valid." });
