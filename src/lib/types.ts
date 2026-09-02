@@ -195,6 +195,53 @@ export interface UniversityRow {
   website_url?: string;
 }
 
+export interface UniversityProgramRow {
+  id: string;
+  university_id: string;
+  university_name: string;
+  program_name: string;
+  country: string;
+  degree: string;
+  course: string;
+  specialization: string;
+  location: string;
+  city: string;
+  region: string;
+  duration: string;
+  fee: string;
+  language: string;
+  program_description: string;
+  eligibility: string;
+  career: string;
+  deadline: string;
+  source_file?: string;
+  is_active?: boolean;
+}
+
+export interface UniversityProgramsPage {
+  rows: UniversityProgramRow[];
+  total: number;
+  limit: number;
+  offset: number;
+}
+
+export interface CatalogCountryRow {
+  name: string;
+  university_count: number;
+  program_count: number;
+}
+
+export interface CatalogUniversityRow {
+  name: string;
+  location: string;
+  program_count: number;
+}
+
+export interface CatalogDegreeRow {
+  name: string;
+  program_count: number;
+}
+
 export interface ChecklistRow {
   id: string;
   document_type: string;
@@ -238,6 +285,7 @@ export interface AdminState {
   salary: SalaryRow[];
   notifications: NotificationRow[];
   universities: UniversityRow[];
+  universityProgramCount: number;
   checklists: ChecklistRow[];
   chatSessions: ChatSessionRow[];
   chatMessages: ChatMessageRow[];

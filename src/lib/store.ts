@@ -19,6 +19,7 @@ const empty: AdminState = {
   salary: [],
   notifications: [],
   universities: [],
+  universityProgramCount: 0,
   checklists: [],
   chatSessions: [],
   chatMessages: [],

@@ -6493,6 +6493,7 @@ import { readFileSync, existsSync } from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
 import pg from "pg";
+import { buildCatalogRecords, parseCatalogCsv } from "./csvImport.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(__dirname, "..");
@@ -6661,6 +6662,182 @@ async function jsonUpsert(tableName, data) {
 
 async function jsonDelete(id) {
   await pool.query("DELETE FROM app_records WHERE id = $1", [id]);
+}
+
+async function jsonClearTable(tableName) {
+  await pool.query("DELETE FROM app_records WHERE table_name = $1", [tableName]);
+}
+
+async function jsonClearCatalogCountries(countries) {
+  const list = [...new Set(countries.map((value) => String(value || "").trim()).filter(Boolean))];
+  if (!list.length) return;
+  for (const country of list) {
+    await pool.query(
+      `DELETE FROM app_records
+       WHERE table_name = 'university_programs'
+         AND lower(data->>'country') = lower($1)`,
+      [country],
+    );
+    await pool.query(
+      `DELETE FROM app_records
+       WHERE table_name = 'universities'
+         AND lower(data->>'country') = lower($1)`,
+      [country],
+    );
+  }
+}
+
+async function jsonBulkUpsert(tableName, rows) {
+  for (const row of rows) {
+    await jsonUpsert(tableName, row);
+  }
+}
+
+async function jsonTableCount(tableName) {
+  const result = await pool.query(
+    "SELECT COUNT(*)::int AS count FROM app_records WHERE table_name = $1",
+    [tableName],
+  );
+  return Number(result.rows[0]?.count || 0);
+}
+
+function catalogFilters({ q = "", country = "", university = "", degree = "", course = "" } = {}) {
+  const clauses = [];
+  const params = ["university_programs"];
+  let index = 2;
+
+  const exact = [
+    ["country", country],
+    ["university_name", university],
+    ["degree", degree],
+    ["course", course],
+  ];
+  for (const [field, value] of exact) {
+    const text = String(value || "").trim();
+    if (!text) continue;
+    clauses.push(`lower(data->>'${field}') = lower($${index})`);
+    params.push(text);
+    index += 1;
+  }
+
+  const needle = String(q || "").trim().toLowerCase();
+  if (needle) {
+    clauses.push(`(
+      lower(data->>'university_name') LIKE $${index} OR
+      lower(data->>'program_name') LIKE $${index} OR
+      lower(data->>'country') LIKE $${index} OR
+      lower(data->>'course') LIKE $${index} OR
+      lower(data->>'specialization') LIKE $${index} OR
+      lower(data->>'location') LIKE $${index}
+    )`);
+    params.push(`%${needle}%`);
+    index += 1;
+  }
+
+  const where = clauses.length ? `AND ${clauses.join(" AND ")}` : "";
+  return { where, params, nextIndex: index };
+}
+
+async function searchUniversityPrograms({
+  q = "",
+  country = "",
+  university = "",
+  degree = "",
+  course = "",
+  limit = 100,
+  offset = 0,
+} = {}) {
+  const safeLimit = Math.min(Math.max(Number(limit) || 100, 1), 500);
+  const safeOffset = Math.max(Number(offset) || 0, 0);
+  const { where, params } = catalogFilters({ q, country, university, degree, course });
+  const listParams = [...params, safeLimit, safeOffset];
+  const limitIndex = params.length + 1;
+  const offsetIndex = params.length + 2;
+
+  const [rowsResult, countResult] = await Promise.all([
+    pool.query(
+      `SELECT id, data
+       FROM app_records
+       WHERE table_name = $1
+       ${where}
+       ORDER BY lower(data->>'course'), lower(data->>'specialization'), lower(data->>'program_name')
+       LIMIT $${limitIndex} OFFSET $${offsetIndex}`,
+      listParams,
+    ),
+    pool.query(
+      `SELECT COUNT(*)::int AS count
+       FROM app_records
+       WHERE table_name = $1
+       ${where}`,
+      params,
+    ),
+  ]);
+  return {
+    rows: rowsResult.rows.map((row) => {
+      const data = row.data && typeof row.data === "object" ? row.data : {};
+      return { ...data, id: data.id || row.id };
+    }),
+    total: Number(countResult.rows[0]?.count || 0),
+    limit: safeLimit,
+    offset: safeOffset,
+  };
+}
+
+async function catalogCountries() {
+  const result = await pool.query(
+    `SELECT
+       data->>'country' AS name,
+       COUNT(DISTINCT data->>'university_name')::int AS university_count,
+       COUNT(*)::int AS program_count
+     FROM app_records
+     WHERE table_name = $1 AND coalesce(data->>'country', '') <> ''
+     GROUP BY data->>'country'
+     ORDER BY lower(data->>'country')`,
+    ["university_programs"],
+  );
+  return result.rows.map((row) => ({
+    name: row.name || "Unknown",
+    university_count: Number(row.university_count || 0),
+    program_count: Number(row.program_count || 0),
+  }));
+}
+
+async function catalogUniversities(country) {
+  const result = await pool.query(
+    `SELECT
+       data->>'university_name' AS name,
+       MAX(data->>'location') AS location,
+       COUNT(*)::int AS program_count
+     FROM app_records
+     WHERE table_name = $1 AND lower(data->>'country') = lower($2)
+     GROUP BY data->>'university_name'
+     ORDER BY lower(data->>'university_name')`,
+    ["university_programs", country],
+  );
+  return result.rows.map((row) => ({
+    name: row.name || "Unknown",
+    location: row.location || "",
+    program_count: Number(row.program_count || 0),
+  }));
+}
+
+async function catalogDegrees(country, university) {
+  const result = await pool.query(
+    `SELECT
+       coalesce(nullif(data->>'degree', ''), 'Other') AS name,
+       COUNT(*)::int AS program_count
+     FROM app_records
+     WHERE table_name = $1
+       AND lower(data->>'country') = lower($2)
+       AND lower(data->>'university_name') = lower($3)
+     GROUP BY coalesce(nullif(data->>'degree', ''), 'Other')
+     ORDER BY lower(coalesce(nullif(data->>'degree', ''), 'Other'))`,
+    ["university_programs", country, university],
+  );
+  return result.rows.map((row) => ({
+    name: row.name || "Other",
+    program_count: Number(row.program_count || 0),
+  }));
 }
 
 function signUser(user) {
@@ -7304,6 +7481,7 @@ async function loadState() {
     jsonNotes,
     sqlNotes,
     jsonUnis,
+    programCount,
     jsonChecks,
     jsonChat,
     jsonChatMsgs,
@@ -7333,6 +7511,7 @@ async function loadState() {
     jsonTable("notifications"),
     pool.query("SELECT * FROM notifications ORDER BY created_at DESC").catch(() => ({ rows: [] })),
     jsonTable("universities"),
+    jsonTableCount("university_programs"),
     jsonTable("document_checklists"),
     jsonTable("chat_sessions"),
     jsonTable("chat_messages"),
@@ -7465,6 +7644,7 @@ async function loadState() {
       jsonNotes,
     ),
     universities: jsonUnis,
+    universityProgramCount: programCount,
     checklists: jsonChecks.sort((a, b) => Number(a.display_order || 0) - Number(b.display_order || 0)),
     chatSessions: jsonChat,
     chatMessages: jsonChatMsgs,
@@ -7514,7 +7694,7 @@ const ALLOWED_ORIGINS = String(process.env.ALLOWED_ORIGINS || "")
   .map((item) => item.trim())
   .filter(Boolean);
 app.use(cors(ALLOWED_ORIGINS.length ? { origin: ALLOWED_ORIGINS } : undefined));
-app.use(express.json({ limit: "12mb" }));
+app.use(express.json({ limit: "20mb" }));
 
 app.get("/api/health", async (_req, res) => {
   try {
@@ -8464,23 +8644,96 @@ app.post("/api/counselors/:id/remove", auth, async (req, res) => {
   }
 });
 
-app.post("/api/universities", auth, async (req, res) => {
-  const payload = {
-    id: req.body.id || `uni-${crypto.randomUUID()}`,
-    name: String(req.body.name || "").trim(),
-    country: String(req.body.country || "").trim(),
-    city: String(req.body.city || "").trim(),
-    ranking: Number(req.body.ranking || 0),
-    is_active: req.body.is_active !== false,
-    is_tie_up: Boolean(req.body.is_tie_up),
-    website_url: String(req.body.website_url || ""),
-    tuition: req.body.tuition || "",
-    created_at: new Date().toISOString(),
-    updated_at: new Date().toISOString(),
-  };
-  if (!payload.name) return res.status(400).json({ error: "University name is required." });
-  await jsonUpsert("universities", payload);
-  res.json(payload);
+app.get("/api/university-catalog/countries", auth, async (_req, res) => {
+  try {
+    res.json(await catalogCountries());
+  } catch (error) {
+    res.status(500).json({ error: error.message || "Could not load countries." });
+  }
+});
+
+app.get("/api/university-catalog/universities", auth, async (req, res) => {
+  try {
+    const country = String(req.query.country || "").trim();
+    if (!country) return res.status(400).json({ error: "Country is required." });
+    res.json(await catalogUniversities(country));
+  } catch (error) {
+    res.status(500).json({ error: error.message || "Could not load universities." });
+  }
+});
+
+app.get("/api/university-catalog/degrees", auth, async (req, res) => {
+  try {
+    const country = String(req.query.country || "").trim();
+    const university = String(req.query.university || "").trim();
+    if (!country || !university) {
+      return res.status(400).json({ error: "Country and university are required." });
+    }
+    res.json(await catalogDegrees(country, university));
+  } catch (error) {
+    res.status(500).json({ error: error.message || "Could not load degree types." });
+  }
+});
+
+app.get("/api/university-programs", auth, async (req, res) => {
+  try {
+    const result = await searchUniversityPrograms({
+      q: req.query.q,
+      country: req.query.country,
+      university: req.query.university,
+      degree: req.query.degree,
+      course: req.query.course,
+      limit: req.query.limit,
+      offset: req.query.offset,
+    });
+    res.json(result);
+  } catch (error) {
+    res.status(500).json({ error: error.message || "Could not load university programs." });
+  }
+});
+
+app.post("/api/universities/import-csv", auth, async (req, res) => {
+  try {
+    const csv = String(req.body.csv || "");
+    const fileName = String(req.body.fileName || "upload.csv").trim();
+    const replaceAll = req.body.replace === true;
+    if (!csv.trim()) return res.status(400).json({ error: "CSV content is required." });
+
+    const parsedRows = parseCatalogCsv(csv);
+    const { universities, programs } = buildCatalogRecords(parsedRows, fileName);
+    const countries = [...new Set(parsedRows.map((row) => row.country).filter(Boolean))];
+
+    if (replaceAll) {
+      await jsonClearTable("university_programs");
+      await jsonClearTable("universities");
+    } else {
+      await jsonClearCatalogCountries(countries);
+    }
+
+    await jsonBulkUpsert("universities", universities);
+    await jsonBulkUpsert("university_programs", programs);
+
+    res.json({
+      ok: true,
+      fileName,
+      replace: replaceAll,
+      countries,
+      universities: universities.length,
+      programs: programs.length,
+    });
+  } catch (error) {
+    res.status(400).json({ error: error.message || "Could not import CSV." });
+  }
+});
+
+app.delete("/api/universities/catalog", auth, async (req, res) => {
+  try {
+    await jsonClearTable("university_programs");
+    await jsonClearTable("universities");
+    res.json({ ok: true });
+  } catch (error) {
+    res.status(500).json({ error: error.message || "Could not clear university catalog." });
+  }
 });
 
 app.patch("/api/universities/:id", auth, async (req, res) => {
