@@ -13,6 +13,7 @@ interface AuthValue {
     firstName: string;
     lastName: string;
     phone?: string;
+    code?: string;
   }) => Promise<void>;
   signOut: (redirect?: boolean) => Promise<void>;
 }

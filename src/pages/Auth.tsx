@@ -16,6 +16,7 @@ export default function Auth() {
   const [firstName, setFirstName] = useState("");
   const [lastName, setLastName] = useState("");
   const [phone, setPhone] = useState("");
+  const [signupCode, setSignupCode] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const navigate = useNavigate();
@@ -31,6 +32,7 @@ export default function Auth() {
     setError("");
     setPassword("");
     setConfirmPassword("");
+    setSignupCode("");
     if (signup) {
       setEmail("");
     } else if (!email || email === "") {
@@ -42,6 +44,7 @@ export default function Auth() {
     setError("");
     setPassword("");
     setConfirmPassword("");
+    setSignupCode("");
     navigate(next === "signup" ? "/signup" : "/", { replace: true });
   };
 
@@ -69,7 +72,14 @@ export default function Auth() {
       if (mode === "login") {
         await signIn(email, password);
       } else {
-        await signUp({ email, password, firstName: firstName.trim(), lastName: lastName.trim(), phone: phone.trim() });
+        await signUp({
+          email,
+          password,
+          firstName: firstName.trim(),
+          lastName: lastName.trim(),
+          phone: phone.trim(),
+          code: signupCode.trim() || undefined,
+        });
       }
       navigate("/admin", { replace: true });
     } catch (err) {
@@ -136,6 +146,16 @@ export default function Auth() {
                   placeholder="+91 98765 43210"
                   value={phone}
                   onChange={(e) => setPhone(e.target.value)}
+                />
+              </div>
+              <div>
+                <Label>Signup code</Label>
+                <Input
+                  name="signupCode"
+                  autoComplete="off"
+                  placeholder="From your Fly Masters admin"
+                  value={signupCode}
+                  onChange={(e) => setSignupCode(e.target.value)}
                 />
               </div>
             </>
@@ -218,7 +238,8 @@ export default function Auth() {
 
         {mode === "signup" && (
           <p className="mt-3 text-center text-xs text-slate-500">
-            Your account gets admin access to this portal. Telecaller and counselor accounts are created separately.
+            Production signup needs a signup code from an existing admin, or ask them to create your account under Users.
+            Telecaller and counselor accounts are created separately.
           </p>
         )}
       </Card>

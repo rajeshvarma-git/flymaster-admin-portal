@@ -8558,11 +8558,15 @@ app.post("/api/notifications/broadcast", auth, async (req, res) => {
   res.json({ ok: true, count: targets.length });
 });
 
+app.use("/api", (_req, res) => {
+  res.status(404).json({ error: "API route not found" });
+});
+
 if (IS_PRODUCTION) {
   const distDir = path.join(root, "dist");
   if (existsSync(distDir)) {
     app.use(express.static(distDir));
-    app.get("*", (_req, res) => {
+    app.get(/^(?!\/api(?:\/|$)).*/, (_req, res) => {
       res.sendFile(path.join(distDir, "index.html"));
     });
   }
