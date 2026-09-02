@@ -1,13 +1,14 @@
 import { useMemo, useState } from "react";
-import { Link, useParams } from "react-router-dom";
+import { Link, useNavigate, useParams } from "react-router-dom";
 import { format } from "date-fns";
-import { ArrowLeft, FileText, MessageCircle, Users } from "lucide-react";
+import { ArrowLeft, ArrowRightLeft, FileText, MessageCircle, Trash2, Users } from "lucide-react";
 import { api } from "@/lib/api";
 import { refreshStore, useAdminStore } from "@/lib/store";
-import { displayName, initials, isConvertedStudent, studentOwns, telecallerLabel } from "@/lib/utils";
+import { counselorOwns, displayName, initials, isConvertedStudent, studentOwns, telecallerLabel } from "@/lib/utils";
 import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
 import { Card } from "@/components/ui/Card";
+import { Select } from "@/components/ui/Field";
 import type { DocumentRow, Lead } from "@/lib/types";
 
 const SILENT_DAYS = 7;
@@ -42,10 +43,13 @@ function docBadge(status: string) {
 
 export default function CounselorDetail() {
   const { id = "" } = useParams();
+  const navigate = useNavigate();
   const store = useAdminStore();
   const [tab, setTab] = useState<Tab>("students");
   const [openStudentId, setOpenStudentId] = useState<string | null>(null);
   const [busyDocId, setBusyDocId] = useState<string | null>(null);
+  const [busyAction, setBusyAction] = useState<"transfer" | "remove" | null>(null);
+  const [transferTargetId, setTransferTargetId] = useState("");
   const [error, setError] = useState("");
 
   const counselor = store.counselors.find((row) => row.id === id || row.auth_user_id === id) || null;
@@ -56,8 +60,7 @@ export default function CounselorDetail() {
         ? store.leads
             .filter(
               (lead) =>
-                isConvertedStudent(lead) &&
-                (counselor.id === lead.assigned_counselor_id || counselor.auth_user_id === lead.assigned_counselor_id),
+                isConvertedStudent(lead) && counselorOwns(counselor, lead.assigned_counselor_id),
             )
             .sort((a, b) => String(b.conversion_date || "").localeCompare(String(a.conversion_date || "")))
         : [],
@@ -127,6 +130,61 @@ export default function CounselorDetail() {
       link.click();
     } catch {
       setError("Could not open this file.");
+    }
+  };
+
+  const otherCounselors = store.counselors.filter(
+    (row) => row.is_active !== false && row.id !== counselor.id && row.auth_user_id !== counselor.auth_user_id,
+  );
+
+  const transferStudents = async () => {
+    if (!transferTargetId) {
+      setError("Choose a counselor to transfer students to.");
+      return;
+    }
+    setBusyAction("transfer");
+    setError("");
+    try {
+      const result = await api<{ count: number }>(`/counselors/${counselor.id}/transfer`, {
+        method: "POST",
+        body: { targetCounselorId: transferTargetId },
+      });
+      setTransferTargetId("");
+      await refreshStore();
+      if (result.count === 0) {
+        setError("No students were assigned to this counselor.");
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not transfer students.");
+    } finally {
+      setBusyAction(null);
+    }
+  };
+
+  const removeCounselor = async () => {
+    if (students.length > 0 && !transferTargetId) {
+      setError(`This counselor still has ${students.length} student(s). Pick someone to transfer them to before removing.`);
+      return;
+    }
+    const message =
+      students.length > 0
+        ? `Transfer ${students.length} student(s) to the selected counselor and remove ${displayName(counselor.first_name, counselor.last_name, counselor.email)}?`
+        : `Remove ${displayName(counselor.first_name, counselor.last_name, counselor.email)} from the counselor list?`;
+    if (!window.confirm(message)) return;
+
+    setBusyAction("remove");
+    setError("");
+    try {
+      await api(`/counselors/${counselor.id}/remove`, {
+        method: "POST",
+        body: transferTargetId ? { targetCounselorId: transferTargetId } : {},
+      });
+      await refreshStore();
+      navigate("/admin/counselors", { replace: true });
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not remove counselor.");
+    } finally {
+      setBusyAction(null);
     }
   };
 
@@ -200,6 +258,55 @@ export default function CounselorDetail() {
           No country is set for this counselor, so they will never appear as a country match when you assign students.
         </Card>
       )}
+
+      <Card className="mt-4 p-5">
+        <div className="flex flex-wrap items-start justify-between gap-4">
+          <div>
+            <p className="text-sm font-semibold text-slate-800">Transfer or remove counselor</p>
+            <p className="mt-1 max-w-xl text-xs text-slate-500">
+              Transfer moves all students, conversations, and shortlists to another counselor so they keep full history.
+              Remove deactivates this counselor — if students are assigned, you must pick someone to transfer them to first.
+            </p>
+          </div>
+        </div>
+        <div className="mt-4 flex flex-wrap items-end gap-2">
+          <div className="min-w-[260px]">
+            <p className="mb-1.5 text-sm font-medium text-slate-700">Transfer students to</p>
+            <Select value={transferTargetId} onChange={(e) => setTransferTargetId(e.target.value)}>
+              <option value="">Choose counselor</option>
+              {otherCounselors.map((row) => (
+                <option key={row.id} value={row.id}>
+                  {displayName(row.first_name, row.last_name, row.email)}
+                  {row.specializations?.length ? ` · ${row.specializations.join(", ")}` : ""}
+                </option>
+              ))}
+            </Select>
+          </div>
+          <Button
+            size="sm"
+            variant="secondary"
+            disabled={busyAction !== null || !transferTargetId || students.length === 0}
+            onClick={() => void transferStudents()}
+          >
+            <ArrowRightLeft className="h-4 w-4" />
+            {busyAction === "transfer" ? "Transferring..." : "Transfer data"}
+          </Button>
+          <Button
+            size="sm"
+            variant="danger"
+            disabled={busyAction !== null}
+            onClick={() => void removeCounselor()}
+          >
+            <Trash2 className="h-4 w-4" />
+            {busyAction === "remove" ? "Removing..." : "Remove counselor"}
+          </Button>
+        </div>
+        {students.length > 0 && (
+          <p className="mt-3 text-xs text-slate-500">
+            {students.length} student{students.length === 1 ? "" : "s"} will move with their chat history when you transfer or remove.
+          </p>
+        )}
+      </Card>
 
       {error && <Card className="mt-4 border-rose-200 bg-rose-50 p-4 text-sm text-rose-800">{error}</Card>}
 

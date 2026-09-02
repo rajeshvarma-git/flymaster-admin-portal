@@ -1,14 +1,15 @@
 import { useMemo, useState } from "react";
 import { Link, useParams } from "react-router-dom";
-import { ArrowLeft, CheckCircle2, MessageSquare, PhoneCall } from "lucide-react";
+import { format } from "date-fns";
+import { ArrowLeft, CheckCircle2, MessageCircle, MessageSquare, PhoneCall } from "lucide-react";
 import { useAdminStore } from "@/lib/store";
-import { counselorLabel, displayName, initials, isConvertedStudent } from "@/lib/utils";
+import { counselorLabel, displayName, initials, isConvertedStudent, studentOwns } from "@/lib/utils";
 import { Badge } from "@/components/ui/Badge";
 import { Card } from "@/components/ui/Card";
 import type { Lead } from "@/lib/types";
 
 const STALE_DAYS = 2;
-type Tab = "open" | "converted" | "calls";
+type Tab = "open" | "converted" | "calls" | "chats";
 
 function daysSince(value?: string | null) {
   if (!value) return null;
@@ -26,8 +27,8 @@ function whenLabel(value?: string | null) {
 }
 
 /**
- * Telecallers have no chat table. Every call they log is appended to the lead's notes
- * as `[date] outcome — what was said`, so the call history is parsed back out of there.
+ * Call notes are appended to the lead as `[date] outcome — what was said`.
+ * Chat messages live in telecaller_conversations / telecaller_messages.
  */
 interface CallEntry {
   lead: Lead;
@@ -99,6 +100,26 @@ export default function TelecallerDetail() {
     [mine],
   );
 
+  const chatThreads = useMemo(() => {
+    if (!telecaller) return [];
+    const convs = store.telecallerConversations.filter((row) => row.telecaller_id === telecaller.id);
+    return convs
+      .map((conv) => {
+        const lead =
+          store.leads.find((row) => studentOwns(row, conv.student_id)) ||
+          null;
+        const msgs = store.telecallerMessages
+          .filter((msg) => msg.conversation_id === conv.id)
+          .sort((a, b) => String(a.created_at || "").localeCompare(String(b.created_at || "")));
+        return { conv, lead, msgs };
+      })
+      .sort((a, b) =>
+        String(b.conv.last_message_at || "").localeCompare(String(a.conv.last_message_at || "")),
+      );
+  }, [telecaller, store.telecallerConversations, store.telecallerMessages, store.leads]);
+
+  const chatCount = chatThreads.reduce((sum, row) => sum + row.msgs.length, 0);
+
   if (!telecaller) {
     return (
       <div>
@@ -110,22 +131,10 @@ export default function TelecallerDetail() {
     );
   }
 
-  const neverCalled = open.filter((lead) => !lead.last_contact_date).length;
-  const overdue = open.filter((lead) => waitLabel(lead).late).length;
-  const thisMonth = converted.filter(
-    (lead) => (lead.conversion_date || "").slice(0, 7) === new Date().toISOString().slice(0, 7),
-  ).length;
-
-  const stats: Array<{ label: string; value: string | number; alert?: boolean }> = [
-    { label: "Open leads", value: open.length },
-    { label: "Needs a call", value: overdue, alert: overdue > 0 },
-    { label: "Never called", value: neverCalled, alert: neverCalled > 0 },
-    { label: "Converted this month", value: thisMonth },
-  ];
-
   const tabs: Array<{ key: Tab; label: string; count: number; icon: typeof PhoneCall }> = [
     { key: "open", label: "Open leads", count: open.length, icon: PhoneCall },
     { key: "converted", label: "Converted students", count: converted.length, icon: CheckCircle2 },
+    { key: "chats", label: "Student chats", count: chatCount, icon: MessageCircle },
     { key: "calls", label: "Call history", count: calls.length, icon: MessageSquare },
   ];
 
@@ -157,22 +166,6 @@ export default function TelecallerDetail() {
           </div>
         </div>
       </Card>
-
-      {overdue > 0 && (
-        <Card className="mt-4 border-rose-200 bg-rose-50 p-4 text-sm text-rose-800">
-          {overdue} of their leads need a call today.
-        </Card>
-      )}
-
-      <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-        {stats.map((stat) => (
-          <Card key={stat.label} className="p-4">
-            <div className={`h-4 w-4 rounded-md ${stat.alert ? "bg-rose-100" : "bg-sky-100"}`} />
-            <p className={`mt-2 text-2xl font-bold ${stat.alert ? "text-rose-600" : ""}`}>{stat.value}</p>
-            <p className="text-sm text-slate-500">{stat.label}</p>
-          </Card>
-        ))}
-      </div>
 
       <div className="mt-6 flex gap-1 overflow-x-auto border-b border-slate-200">
         {tabs.map(({ key, label, count, icon: Icon }) => (
@@ -271,8 +264,7 @@ export default function TelecallerDetail() {
           ) : (
             <>
               <Card className="mb-4 border-sky-100 bg-sky-50 p-4 text-xs text-slate-700">
-                Telecallers and students do not chat in the app. This is the call log — what the
-                telecaller recorded after each phone call, newest first.
+                Phone call notes the telecaller logged after each call, newest first.
               </Card>
               <Card className="overflow-hidden">
                 {calls.map((entry, index) => (
@@ -291,6 +283,60 @@ export default function TelecallerDetail() {
                 ))}
               </Card>
             </>
+          ))}
+
+        {tab === "chats" &&
+          (chatThreads.length === 0 ? (
+            <Card className="p-8 text-center text-sm text-slate-500">
+              No chat conversations yet. Messages appear here when the telecaller chats from the telecaller portal.
+            </Card>
+          ) : (
+            <div className="space-y-4">
+              {chatThreads.map(({ conv, lead, msgs }) => (
+                <Card key={conv.id} className="overflow-hidden">
+                  <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-200 px-4 py-3">
+                    <div>
+                      <p className="text-sm font-semibold">
+                        {lead
+                          ? displayName(lead.first_name, lead.last_name, lead.email)
+                          : "Unknown student"}
+                      </p>
+                      <p className="text-xs text-slate-500">
+                        {msgs.length} message{msgs.length === 1 ? "" : "s"}
+                        {conv.last_message_at ? ` · Last ${whenLabel(conv.last_message_at)}` : ""}
+                      </p>
+                    </div>
+                    {lead && (
+                      <Link to={`/admin/students/${lead.id}`} className="text-xs font-semibold text-sky-600">
+                        Open student
+                      </Link>
+                    )}
+                  </div>
+                  <div className="flex max-h-64 flex-col gap-2 overflow-y-auto bg-slate-50 p-4">
+                    {msgs.map((msg) => {
+                      const fromStudent = lead ? studentOwns(lead, msg.sender_id) : false;
+                      return (
+                        <div
+                          key={msg.id}
+                          className={`max-w-[80%] rounded-2xl px-3 py-2 text-sm ${
+                            fromStudent
+                              ? "self-start rounded-bl-sm border border-slate-200 bg-white"
+                              : "self-end rounded-br-sm bg-sky-600 text-white"
+                          }`}
+                        >
+                          <p>{msg.message}</p>
+                          {msg.created_at && (
+                            <p className={`mt-1 text-[10px] ${fromStudent ? "text-slate-400" : "text-white/60"}`}>
+                              {format(new Date(msg.created_at), "PP p")}
+                            </p>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                </Card>
+              ))}
+            </div>
           ))}
       </div>
     </div>

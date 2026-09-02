@@ -561,7 +561,7 @@ export default function App() {
         <BrowserRouter>
           <Routes>
             <Route path="/" element={<Auth />} />
-            <Route path="/signup" element={<Navigate to="/" replace />} />
+            <Route path="/signup" element={<Auth />} />
             <Route path="/auth" element={<Navigate to="/" replace />} />
             <Route path="/login" element={<Navigate to="/" replace />} />
             <Route

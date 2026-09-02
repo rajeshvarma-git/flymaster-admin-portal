@@ -116,6 +116,24 @@ export interface ConversationRow {
   last_message_at?: string | null;
 }
 
+export interface TelecallerConversationRow {
+  id: string;
+  student_id: string;
+  telecaller_id: string;
+  last_message_at?: string | null;
+  created_at?: string | null;
+}
+
+export interface TelecallerMessageRow {
+  id: string;
+  conversation_id: string;
+  sender_id: string;
+  receiver_id: string;
+  message: string;
+  is_read: boolean;
+  created_at: string;
+}
+
 export interface MessageRow {
   id: string;
   conversation_id: string;
@@ -213,6 +231,8 @@ export interface AdminState {
   shortlists: ShortlistRow[];
   conversations: ConversationRow[];
   messages: MessageRow[];
+  telecallerConversations: TelecallerConversationRow[];
+  telecallerMessages: TelecallerMessageRow[];
   leave: LeaveRow[];
   attendance: AttendanceRow[];
   salary: SalaryRow[];

@@ -1944,7 +1944,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { format } from "date-fns";
-import { ArrowLeft, BookOpen, FileText, MessageCircle, MessagesSquare, University, User } from "lucide-react";
+import { ArrowLeft, BookOpen, FileText, MessageCircle, MessagesSquare, PhoneCall, University, User } from "lucide-react";
 import { api } from "@/lib/api";
 import { refreshStore, useAdminStore } from "@/lib/store";
 import { counselorLabel, counselorOwns, displayName, initials, isConvertedStudent, studentOwns, telecallerLabel } from "@/lib/utils";
@@ -1975,7 +1975,7 @@ interface ChecklistResponse {
 }
 
 const SILENT_DAYS = 7;
-type Tab = "overview" | "documents" | "applications" | "shortlists" | "chat" | "ai";
+type Tab = "overview" | "documents" | "applications" | "shortlists" | "chat" | "telecaller" | "ai";
 
 function daysSince(value?: string | null) {
   if (!value) return null;
@@ -2018,6 +2018,7 @@ export default function StudentDetail() {
   const [tab, setTab] = useState<Tab>("overview");
   const [busyId, setBusyId] = useState<string | null>(null);
   const [pickedCounselor, setPickedCounselor] = useState("");
+  const [pickedTelecaller, setPickedTelecaller] = useState("");
   const [checklist, setChecklist] = useState<ChecklistResponse | null>(null);
   const [error, setError] = useState("");
 
@@ -2044,6 +2045,17 @@ export default function StudentDetail() {
       .filter((msg) => threadIds.has(msg.conversation_id))
       .sort((a, b) => String(a.created_at || "").localeCompare(String(b.created_at || "")));
   }, [student, store.conversations, store.messages]);
+  const telecallerMessages = useMemo(() => {
+    if (!student) return [];
+    const threadIds = new Set(
+      store.telecallerConversations
+        .filter((row) => studentOwns(student, row.student_id))
+        .map((row) => row.id),
+    );
+    return store.telecallerMessages
+      .filter((msg) => threadIds.has(msg.conversation_id))
+      .sort((a, b) => String(a.created_at || "").localeCompare(String(b.created_at || "")));
+  }, [student, store.telecallerConversations, store.telecallerMessages]);
   const aiMessages = useMemo(() => {
     if (!student) return [];
     const sessionIds = new Set(
@@ -2081,8 +2093,11 @@ export default function StudentDetail() {
   const hasOffer = apps.some((app) => app.status === "offer");
 
   const counselor = store.counselors.find((row) => counselorOwns(row, student.assigned_counselor_id)) || null;
+  const telecaller = store.telecallers.find((row) => row.id === student.assigned_telecaller_id) || null;
   const counselorLoad = (counselorId: string) =>
     store.leads.filter((lead) => isConvertedStudent(lead) && lead.assigned_counselor_id === counselorId).length;
+  const telecallerLoad = (telecallerId: string) =>
+    store.leads.filter((lead) => String(lead.assigned_telecaller_id || "") === telecallerId).length;
 
   const assignCounselor = async (counselorId: string) => {
     if (!counselorId) return;
@@ -2111,6 +2126,41 @@ export default function StudentDetail() {
       await refreshStore();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not remove the counselor.");
+    } finally {
+      setBusyId(null);
+    }
+  };
+
+  const assignTelecaller = async (telecallerId: string) => {
+    if (!telecallerId) return;
+    setBusyId("telecaller");
+    setError("");
+    try {
+      await api(`/leads/${student.id}`, {
+        method: "PATCH",
+        body: { assigned_telecaller_id: telecallerId, status: "assigned" },
+      });
+      setPickedTelecaller("");
+      await refreshStore();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not assign the telecaller.");
+    } finally {
+      setBusyId(null);
+    }
+  };
+
+  const removeTelecaller = async () => {
+    setBusyId("telecaller");
+    setError("");
+    try {
+      await api(`/leads/${student.id}`, {
+        method: "PATCH",
+        body: { assigned_telecaller_id: null },
+      });
+      setPickedTelecaller("");
+      await refreshStore();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not remove the telecaller.");
     } finally {
       setBusyId(null);
     }
@@ -2172,6 +2222,7 @@ export default function StudentDetail() {
     { key: "applications", label: "Applications", count: apps.length, icon: BookOpen },
     { key: "shortlists", label: "Shortlists", count: shortlists.length, icon: University },
     { key: "chat", label: "Counselor chat", count: messages.length, icon: MessageCircle },
+    { key: "telecaller", label: "Telecaller chat", count: telecallerMessages.length, icon: PhoneCall },
     { key: "ai", label: "AI chat", count: aiMessages.length, icon: MessagesSquare },
   ];
 
@@ -2313,6 +2364,70 @@ export default function StudentDetail() {
             )}
           </div>
         </div>
+      </Card>
+
+      <Card className="mt-4 p-5">
+        <p className="text-sm font-semibold text-slate-700">Telecaller</p>
+        <div className="mt-3 grid gap-4 lg:grid-cols-2">
+          <div>
+            {telecaller ? (
+              <Link
+                to={`/admin/telecallers/${telecaller.id}`}
+                className="mt-2 flex items-center gap-3 rounded-xl border border-slate-200 p-3 transition hover:border-sky-200"
+              >
+                <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-sky-100 text-sm font-bold text-sky-700">
+                  {initials(telecaller.first_name, telecaller.last_name, telecaller.email)}
+                </span>
+                <span className="min-w-0">
+                  <span className="block font-semibold">
+                    {displayName(telecaller.first_name, telecaller.last_name, telecaller.email)}
+                  </span>
+                  <span className="block text-xs text-slate-500">{telecallerLoad(telecaller.id)} leads assigned</span>
+                </span>
+              </Link>
+            ) : (
+              <p className="mt-2 text-sm text-slate-500">No telecaller assigned.</p>
+            )}
+          </div>
+          <div className="flex flex-wrap items-end gap-2">
+            <div className="min-w-[240px]">
+              <p className="mb-1.5 text-sm font-medium text-slate-700">
+                {telecaller ? "Change telecaller" : "Choose telecaller"}
+              </p>
+              <Select value={pickedTelecaller} onChange={(e) => setPickedTelecaller(e.target.value)}>
+                <option value="">Choose telecaller</option>
+                {store.telecallers
+                  .filter((row) => row.is_active !== false && (!telecaller || row.id !== telecaller.id))
+                  .map((row) => (
+                    <option key={row.id} value={row.id}>
+                      {displayName(row.first_name, row.last_name, row.email)}
+                      {` · ${telecallerLoad(row.id)} leads`}
+                    </option>
+                  ))}
+              </Select>
+            </div>
+            <Button
+              size="sm"
+              disabled={busyId === "telecaller" || !pickedTelecaller}
+              onClick={() => void assignTelecaller(pickedTelecaller)}
+            >
+              {telecaller ? "Reassign" : "Assign"}
+            </Button>
+            {telecaller && (
+              <Button
+                size="sm"
+                variant="secondary"
+                disabled={busyId === "telecaller"}
+                onClick={() => void removeTelecaller()}
+              >
+                Remove
+              </Button>
+            )}
+          </div>
+        </div>
+        <p className="mt-3 text-xs text-slate-500">
+          Reassigning moves chat history to the new telecaller or counselor so they see the full student record.
+        </p>
       </Card>
       {silence !== null && silence >= SILENT_DAYS && (
         <Card className="mt-4 border-rose-200 bg-rose-50 p-4 text-sm text-rose-800">
@@ -2629,6 +2744,51 @@ export default function StudentDetail() {
               </div>
               <p className="border-t border-slate-200 bg-white p-3 text-xs text-slate-500">
                 Admin view is read-only. The counselor replies from the counselor portal.
+              </p>
+            </Card>
+          ))}
+
+        {tab === "telecaller" &&
+          (telecallerMessages.length === 0 ? (
+            <Card className="p-8 text-center text-sm text-slate-500">
+              {student.assigned_telecaller_id
+                ? "No messages exchanged with the telecaller yet."
+                : "No telecaller assigned, so there is no conversation."}
+            </Card>
+          ) : (
+            <Card className="flex max-h-[62vh] flex-col overflow-hidden">
+              <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-200 p-4">
+                <p className="text-sm font-semibold">
+                  {student.first_name} and {telecallerLabel(store.telecallers, student.assigned_telecaller_id)}
+                </p>
+                <span className="text-xs text-slate-500">
+                  Last {whenLabel(telecallerMessages[telecallerMessages.length - 1]?.created_at)}
+                </span>
+              </div>
+              <div className="flex flex-1 flex-col gap-3 overflow-y-auto bg-slate-50 p-4">
+                {telecallerMessages.map((msg) => {
+                  const fromStudent = studentOwns(student, msg.sender_id);
+                  return (
+                    <div
+                      key={msg.id}
+                      className={`max-w-[76%] rounded-2xl px-3.5 py-2.5 text-sm ${
+                        fromStudent
+                          ? "self-start rounded-bl-sm border border-slate-200 bg-white"
+                          : "self-end rounded-br-sm bg-sky-600 text-white"
+                      }`}
+                    >
+                      <p>{msg.message}</p>
+                      {msg.created_at && (
+                        <p className={`mt-1 text-[11px] ${fromStudent ? "text-slate-400" : "text-white/60"}`}>
+                          {format(new Date(msg.created_at), "PP p")}
+                        </p>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+              <p className="border-t border-slate-200 bg-white p-3 text-xs text-slate-500">
+                Admin view is read-only. The telecaller replies from the telecaller portal.
               </p>
             </Card>
           ))}

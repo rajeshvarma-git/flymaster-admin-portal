@@ -71,7 +71,7 @@ export default function Counselors() {
       </div>
 
       <Card className="overflow-hidden">
-        {store.counselors.map((counselor) => {
+        {store.counselors.filter((counselor) => counselor.is_active !== false).map((counselor) => {
           const students = store.leads.filter((lead) => isConvertedStudent(lead) && counselorOwns(counselor, lead.assigned_counselor_id));
           const pending = store.documents.filter(
             (doc) =>
@@ -116,7 +116,7 @@ export default function Counselors() {
             </Link>
           );
         })}
-        {store.counselors.length === 0 && (
+        {store.counselors.filter((counselor) => counselor.is_active !== false).length === 0 && (
           <p className="p-8 text-center text-sm text-slate-500">
             No counselors yet. Create one from Users with role Counselor, or sign up on the counselor portal — both
             appear here.

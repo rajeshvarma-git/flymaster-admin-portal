@@ -6525,12 +6525,15 @@ if (IS_PRODUCTION) {
 
 const DATABASE_URL = process.env.DATABASE_URL || "postgresql://postgres:postgres@127.0.0.1:5433/flymasters";
 const JWT_SECRET = process.env.JWT_SECRET || "flymasters-admin-dev-secret";
-const PORT = Number(process.env.API_PORT || 8788);
+const PORT = Number(process.env.PORT || process.env.API_PORT || 8788);
 const ADMIN_ID = "local-admin-1";
 const ADMIN_ROLES = ["admin", "super_admin"];
 // Optional shared code that lets telecallers register themselves. Leave unset and the
 // self-signup endpoint stays switched off, so accounts can only be made by an admin.
 const TELECALLER_SIGNUP_CODE = process.env.TELECALLER_SIGNUP_CODE || "";
+// In production, set ADMIN_SIGNUP_OPEN=true or ADMIN_SIGNUP_CODE to allow new admin accounts.
+const ADMIN_SIGNUP_OPEN = String(process.env.ADMIN_SIGNUP_OPEN || "").toLowerCase() === "true";
+const ADMIN_SIGNUP_CODE = process.env.ADMIN_SIGNUP_CODE || "";
 
 const pool = new pg.Pool({
   connectionString: DATABASE_URL,
@@ -6907,7 +6910,7 @@ async function publishCounselorAccount(row, passwordPlain) {
   await jsonUpsert("counselors", {
     ...counselor,
     user_id: authId,
-    is_active: true,
+    is_active: counselor.is_active === false ? false : true,
     specializations: row.specializations?.length ? row.specializations : (counselor.specializations || []),
     created_at: counselor.created_at || now,
     updated_at: now,
@@ -7080,6 +7083,160 @@ function loadTelecallers(users) {
     }));
 }
 
+function studentKeyIds(lead) {
+  return [...new Set([String(lead.user_id || ""), String(lead.id)].filter(Boolean))];
+}
+
+/** Move counselor chat threads and shortlists to the newly assigned counselor. */
+async function transferCounselorOwnership(lead, newCounselorId) {
+  if (!newCounselorId) return;
+  const ids = studentKeyIds(lead);
+  const convs = await jsonTable("private_conversations");
+  for (const conv of convs) {
+    if (ids.includes(String(conv.student_id))) {
+      await jsonUpsert("private_conversations", { ...conv, counselor_id: newCounselorId });
+    }
+  }
+  for (const sid of ids) {
+    if (isUuid(sid) && isUuid(newCounselorId)) {
+      await pool.query("UPDATE private_conversations SET counselor_id = $1 WHERE student_id = $2", [newCounselorId, sid]).catch(() => {});
+    }
+  }
+  const shorts = await jsonTable("university_shortlists");
+  for (const row of shorts) {
+    if (ids.includes(String(row.student_id))) {
+      await jsonUpsert("university_shortlists", { ...row, counselor_id: newCounselorId });
+    }
+  }
+  for (const sid of ids) {
+    if (isUuid(sid) && isUuid(newCounselorId)) {
+      await pool.query("UPDATE university_shortlists SET counselor_id = $1 WHERE student_id = $2", [newCounselorId, sid]).catch(() => {});
+    }
+  }
+}
+
+/** Move telecaller chat threads to the newly assigned telecaller. */
+async function transferTelecallerOwnership(lead, newTelecallerId) {
+  if (!newTelecallerId) return;
+  const ids = studentKeyIds(lead);
+  const convs = await jsonTable("telecaller_conversations");
+  for (const conv of convs) {
+    if (ids.includes(String(conv.student_id))) {
+      await jsonUpsert("telecaller_conversations", { ...conv, telecaller_id: newTelecallerId });
+    }
+  }
+}
+
+async function syncOwnershipOnAssignment(before, after) {
+  if (!before || !after) return;
+  const counselorChanged =
+    String(before.assigned_counselor_id || "") !== String(after.assigned_counselor_id || "");
+  const telecallerChanged =
+    String(before.assigned_telecaller_id || "") !== String(after.assigned_telecaller_id || "");
+  if (counselorChanged && after.assigned_counselor_id) {
+    await transferCounselorOwnership(after, after.assigned_counselor_id);
+  }
+  if (telecallerChanged && after.assigned_telecaller_id) {
+    await transferTelecallerOwnership(after, after.assigned_telecaller_id);
+  }
+}
+
+function counselorKeyIds(counselor) {
+  return [...new Set([String(counselor.id || ""), String(counselor.auth_user_id || "")].filter(Boolean))];
+}
+
+function leadOwnedByCounselor(lead, counselor) {
+  const ids = counselorKeyIds(counselor);
+  return ids.includes(String(lead.assigned_counselor_id || ""));
+}
+
+async function transferCounselorThreads(fromCounselor, toCounselor) {
+  const fromIds = counselorKeyIds(fromCounselor);
+  const targetId = String(toCounselor.id);
+  const convs = await jsonTable("private_conversations");
+  for (const conv of convs) {
+    if (fromIds.includes(String(conv.counselor_id))) {
+      await jsonUpsert("private_conversations", { ...conv, counselor_id: targetId });
+    }
+  }
+  for (const fid of fromIds) {
+    if (isUuid(fid) && isUuid(targetId)) {
+      await pool.query("UPDATE private_conversations SET counselor_id = $1 WHERE counselor_id = $2", [targetId, fid]).catch(() => {});
+    }
+  }
+  const shorts = await jsonTable("university_shortlists");
+  for (const row of shorts) {
+    if (fromIds.includes(String(row.counselor_id))) {
+      await jsonUpsert("university_shortlists", { ...row, counselor_id: targetId });
+    }
+  }
+  for (const fid of fromIds) {
+    if (isUuid(fid) && isUuid(targetId)) {
+      await pool.query("UPDATE university_shortlists SET counselor_id = $1 WHERE counselor_id = $2", [targetId, fid]).catch(() => {});
+    }
+  }
+}
+
+async function transferCounselorStudents(fromCounselorId, toCounselorId) {
+  const counselors = await loadCounselors();
+  const from = counselors.find((row) => row.id === fromCounselorId || row.auth_user_id === fromCounselorId);
+  const to = counselors.find((row) => row.id === toCounselorId || row.auth_user_id === toCounselorId);
+  if (!from) throw new Error("Counselor not found.");
+  if (!to) throw new Error("Target counselor not found.");
+  if (from.id === to.id) throw new Error("Choose a different counselor to transfer to.");
+
+  const targetId = String(to.id);
+  const leads = await jsonTable("student_leads");
+  let count = 0;
+  for (const lead of leads) {
+    const converted = lead.entity_type === "student" || lead.lead_status === "converted";
+    if (!converted || !leadOwnedByCounselor(lead, from)) continue;
+    const before = { ...lead };
+    const updated = await applyLeadPatch(lead.id, { assigned_counselor_id: targetId, status: "assigned" });
+    await syncOwnershipOnAssignment(before, updated);
+    count += 1;
+  }
+  await transferCounselorThreads(from, to);
+  return count;
+}
+
+async function deactivateCounselor(counselorId) {
+  const counselors = await loadCounselors();
+  const counselor = counselors.find((row) => row.id === counselorId || row.auth_user_id === counselorId);
+  if (!counselor) throw new Error("Counselor not found.");
+
+  const leads = await jsonTable("student_leads");
+  for (const lead of leads) {
+    if (!leadOwnedByCounselor(lead, counselor)) continue;
+    await applyLeadPatch(lead.id, { assigned_counselor_id: null, status: "unassigned" });
+  }
+
+  const keys = counselorKeyIds(counselor);
+  const jsonCounselors = await jsonTable("counselors");
+  for (const row of jsonCounselors) {
+    if (keys.includes(String(row.id)) || keys.includes(String(row.user_id))) {
+      await jsonUpsert("counselors", { ...row, is_active: false, updated_at: new Date().toISOString() });
+    }
+  }
+
+  const authId = String(counselor.auth_user_id || counselor.id);
+  const roles = await jsonTable("user_roles");
+  const roleRow = roles.find((row) => String(row.user_id) === authId);
+  if (roleRow && roleRow.role === "counselor") {
+    await jsonDelete(roleRow.id);
+  }
+
+  const email = String(counselor.email || "").trim().toLowerCase();
+  if (email) {
+    await pool.query("DELETE FROM counselor_users WHERE lower(email) = $1", [email]).catch(() => {});
+  }
+  if (isUuid(counselor.id)) {
+    await pool.query("DELETE FROM counselor_users WHERE id = $1", [counselor.id]).catch(() => {});
+  }
+
+  return counselor;
+}
+
 async function applyLeadPatch(id, patch) {
   if (patch.lead_status === "converted" || patch.entity_type === "student") {
     patch.entity_type = "student";
@@ -7129,6 +7286,8 @@ async function loadState() {
     jsonChecks,
     jsonChat,
     jsonChatMsgs,
+    jsonTcConv,
+    jsonTcMsg,
     directory,
     counselors,
     users,
@@ -7156,6 +7315,8 @@ async function loadState() {
     jsonTable("document_checklists"),
     jsonTable("chat_sessions"),
     jsonTable("chat_messages"),
+    jsonTable("telecaller_conversations"),
+    jsonTable("telecaller_messages"),
     studentDirectory(),
     loadCounselors(),
     loadUsers(),
@@ -7286,6 +7447,21 @@ async function loadState() {
     checklists: jsonChecks.sort((a, b) => Number(a.display_order || 0) - Number(b.display_order || 0)),
     chatSessions: jsonChat,
     chatMessages: jsonChatMsgs,
+    telecallerConversations: jsonTcConv.map((row) => ({
+      ...row,
+      id: String(row.id),
+      student_id: String(row.student_id),
+      telecaller_id: String(row.telecaller_id),
+    })),
+    telecallerMessages: jsonTcMsg.map((row) => ({
+      ...row,
+      id: String(row.id),
+      conversation_id: String(row.conversation_id),
+      sender_id: String(row.sender_id),
+      receiver_id: String(row.receiver_id),
+      message: row.message || "",
+      is_read: Boolean(row.is_read),
+    })),
   };
 }
 
@@ -7328,8 +7504,18 @@ app.get("/api/health", async (_req, res) => {
   }
 });
 
-app.post("/api/auth/signup", auth, async (req, res) => {
+app.post("/api/auth/signup", async (req, res) => {
   try {
+    if (IS_PRODUCTION && !ADMIN_SIGNUP_OPEN) {
+      if (!ADMIN_SIGNUP_CODE || String(req.body.code || "") !== ADMIN_SIGNUP_CODE) {
+        return res.status(403).json({
+          error: "Admin signup is closed. Ask an existing admin to create your account.",
+        });
+      }
+    } else if (ADMIN_SIGNUP_CODE && String(req.body.code || "") !== ADMIN_SIGNUP_CODE) {
+      return res.status(403).json({ error: "That signup code is not valid." });
+    }
+
     const email = String(req.body.email || "").trim().toLowerCase();
     const password = String(req.body.password || "");
     const firstName = String(req.body.firstName || "").trim();
@@ -7488,7 +7674,9 @@ async function ownedLead(telecallerId, leadId) {
 // private_conversations/private_messages tables the counselor portal uses.
 async function ownedStudentLead(telecallerId, studentId) {
   const rows = await jsonTable("student_leads");
-  const lead = rows.find((row) => String(row.user_id || "") === String(studentId));
+  const lead = rows.find(
+    (row) => String(row.user_id || "") === String(studentId) || String(row.id) === String(studentId),
+  );
   if (!lead) return { error: "This lead has no student portal account yet." };
   if (String(lead.assigned_telecaller_id || "") !== String(telecallerId)) {
     return { error: "That lead is not assigned to you." };
@@ -7531,16 +7719,26 @@ app.post("/api/telecaller/conversations", telecallerAuth, async (req, res) => {
     const owned = await ownedStudentLead(req.user.id, studentId);
     if (owned.error) return res.status(403).json({ error: owned.error });
 
+    const studentKey = String(owned.lead.user_id || owned.lead.id);
     const rows = await jsonTable("telecaller_conversations");
     const existing = rows.find(
-      (row) => String(row.telecaller_id) === String(req.user.id) && String(row.student_id) === String(studentId),
+      (row) =>
+        String(row.telecaller_id) === String(req.user.id) &&
+        (String(row.student_id) === studentKey ||
+          String(row.student_id) === String(owned.lead.id) ||
+          String(row.student_id) === String(owned.lead.user_id || "")),
     );
-    if (existing) return res.json(existing);
+    if (existing) {
+      if (String(existing.student_id) !== studentKey) {
+        await jsonUpsert("telecaller_conversations", { ...existing, student_id: studentKey });
+      }
+      return res.json({ ...existing, student_id: studentKey });
+    }
 
     const created = await jsonUpsert("telecaller_conversations", {
       id: crypto.randomUUID(),
       telecaller_id: req.user.id,
-      student_id: studentId,
+      student_id: studentKey,
       last_message_at: null,
       created_at: new Date().toISOString(),
     });
@@ -7903,11 +8101,24 @@ app.patch("/api/leads/:id", auth, async (req, res) => {
     patch.assigned_counselor_id = null;
   }
   const updated = await applyLeadPatch(req.params.id, patch);
+  await syncOwnershipOnAssignment(current, updated);
   if (patch.assigned_telecaller_id) {
-    await notify(patch.assigned_telecaller_id, "Lead assigned", "A student lead was assigned to you.", "info", "/admin/leads");
+    await notify(
+      patch.assigned_telecaller_id,
+      "Student assigned",
+      `${updated.first_name || "A student"} was assigned to you with full history.`,
+      "info",
+      "/telecaller",
+    );
   }
-  if (patch.assigned_counselor_id && patch.lead_status !== "converted" && patch.entity_type !== "student") {
-    await notify(patch.assigned_counselor_id, "Student assigned", "A converted student was assigned to you.", "info", "/counselor/students");
+  if (patch.assigned_counselor_id) {
+    await notify(
+      patch.assigned_counselor_id,
+      "Student assigned",
+      `${updated.first_name || "A student"} was assigned to you with full history.`,
+      "info",
+      "/counselor/students",
+    );
   }
   res.json({ ok: true, lead: updated });
 });
@@ -7933,10 +8144,17 @@ app.post("/api/leads/bulk-assign", auth, async (req, res) => {
     if (!lead) continue;
     const converted = lead.entity_type === "student" || lead.lead_status === "converted";
     if (!converted) continue;
-    await applyLeadPatch(id, { assigned_counselor_id: counselorId, status: "assigned" });
+    const updated = await applyLeadPatch(id, { assigned_counselor_id: counselorId, status: "assigned" });
+    await syncOwnershipOnAssignment(lead, updated);
     count += 1;
   }
-  await notify(counselorId, "Students assigned", `${count} student(s) were assigned to you.`, "info", "/counselor/students");
+  await notify(
+    counselorId,
+    "Students assigned",
+    `${count} student(s) were assigned to you with full history.`,
+    "info",
+    "/counselor/students",
+  );
   res.json({ ok: true, count });
 });
 
@@ -7944,14 +8162,23 @@ app.post("/api/leads/bulk-assign-telecaller", auth, async (req, res) => {
   const ids = Array.isArray(req.body.ids) ? req.body.ids.map(String) : [];
   const telecallerId = req.body.telecallerId ? String(req.body.telecallerId) : "";
   if (!ids.length || !telecallerId) return res.status(400).json({ error: "Select leads and a telecaller." });
+  let count = 0;
   for (const id of ids) {
     const jsonLeads = await jsonTable("student_leads");
     const lead = jsonLeads.find((row) => String(row.id) === id);
-    if (!lead || lead.entity_type === "student" || lead.lead_status === "converted") continue;
-    await applyLeadPatch(id, { assigned_telecaller_id: telecallerId, status: "assigned" });
+    if (!lead) continue;
+    const updated = await applyLeadPatch(id, { assigned_telecaller_id: telecallerId, status: "assigned" });
+    await syncOwnershipOnAssignment(lead, updated);
+    count += 1;
   }
-  await notify(telecallerId, "Leads assigned", `${ids.length} lead(s) were assigned to you.`, "info", "/admin/leads");
-  res.json({ ok: true, count: ids.length });
+  await notify(
+    telecallerId,
+    "Leads assigned",
+    `${count} lead(s) were assigned to you with full history.`,
+    "info",
+    "/telecaller",
+  );
+  res.json({ ok: true, count });
 });
 
 app.patch("/api/documents/:id", auth, async (req, res) => {
@@ -8150,6 +8377,68 @@ app.post("/api/users", auth, async (req, res) => {
   res.json({ ok: true, id });
 });
 
+app.post("/api/counselors/:id/transfer", auth, async (req, res) => {
+  try {
+    const targetCounselorId = String(req.body.targetCounselorId || "");
+    if (!targetCounselorId) {
+      return res.status(400).json({ error: "Choose a counselor to transfer students to." });
+    }
+    const count = await transferCounselorStudents(req.params.id, targetCounselorId);
+    if (count > 0) {
+      await notify(
+        targetCounselorId,
+        "Students transferred",
+        `${count} student(s) were transferred to you with full conversation history.`,
+        "info",
+        "/counselor/students",
+      );
+    }
+    res.json({ ok: true, count });
+  } catch (error) {
+    res.status(400).json({ error: error.message || "Could not transfer students." });
+  }
+});
+
+app.post("/api/counselors/:id/remove", auth, async (req, res) => {
+  try {
+    const counselors = await loadCounselors();
+    const counselor = counselors.find((row) => row.id === req.params.id || row.auth_user_id === req.params.id);
+    if (!counselor) return res.status(404).json({ error: "Counselor not found." });
+
+    const targetCounselorId = req.body.targetCounselorId ? String(req.body.targetCounselorId) : "";
+    const assigned = (await jsonTable("student_leads")).filter(
+      (lead) =>
+        (lead.entity_type === "student" || lead.lead_status === "converted") &&
+        leadOwnedByCounselor(lead, counselor),
+    );
+
+    if (assigned.length > 0 && !targetCounselorId) {
+      return res.status(400).json({
+        error: `${assigned.length} student(s) still assigned. Pick a counselor to transfer them to, then remove.`,
+      });
+    }
+
+    let transferred = 0;
+    if (targetCounselorId && assigned.length > 0) {
+      transferred = await transferCounselorStudents(req.params.id, targetCounselorId);
+      if (transferred > 0) {
+        await notify(
+          targetCounselorId,
+          "Students transferred",
+          `${transferred} student(s) were transferred to you before the previous counselor was removed.`,
+          "info",
+          "/counselor/students",
+        );
+      }
+    }
+
+    await deactivateCounselor(req.params.id);
+    res.json({ ok: true, transferred });
+  } catch (error) {
+    res.status(400).json({ error: error.message || "Could not remove counselor." });
+  }
+});
+
 app.post("/api/universities", auth, async (req, res) => {
   const payload = {
     id: req.body.id || `uni-${crypto.randomUUID()}`,
@@ -8247,6 +8536,16 @@ app.post("/api/notifications/broadcast", auth, async (req, res) => {
   }
   res.json({ ok: true, count: targets.length });
 });
+
+if (IS_PRODUCTION) {
+  const distDir = path.join(root, "dist");
+  if (existsSync(distDir)) {
+    app.use(express.static(distDir));
+    app.get("*", (_req, res) => {
+      res.sendFile(path.join(distDir, "index.html"));
+    });
+  }
+}
 
 // ---------------------------------------------------------------------------
 // Unassigned lead watcher
@@ -8483,8 +8782,8 @@ function startUnassignedWatcher() {
 async function start() {
   await applySchema();
   await ensureAdminUser();
-  app.listen(PORT, () => {
-    console.log(`Fly Masters admin API on http://127.0.0.1:${PORT}`);
+  app.listen(PORT, "0.0.0.0", () => {
+    console.log(`Fly Masters admin API on port ${PORT}`);
     startUnassignedWatcher();
   });
 }
