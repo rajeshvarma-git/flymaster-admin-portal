@@ -134,7 +134,7 @@ export default function TelecallerDetail() {
   const tabs: Array<{ key: Tab; label: string; count: number; icon: typeof PhoneCall }> = [
     { key: "open", label: "Open leads", count: open.length, icon: PhoneCall },
     { key: "converted", label: "Converted students", count: converted.length, icon: CheckCircle2 },
-    { key: "chats", label: "Student chats", count: chatCount, icon: MessageCircle },
+    { key: "chats", label: "Lead chats", count: chatCount, icon: MessageCircle },
     { key: "calls", label: "Call history", count: calls.length, icon: MessageSquare },
   ];
 
