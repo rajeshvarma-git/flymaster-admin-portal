@@ -6488,7 +6488,7 @@ import cors from "cors";
 import express from "express";
 import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
-import { randomBytes, scryptSync, timingSafeEqual } from "crypto";
+import crypto, { randomBytes, scryptSync, timingSafeEqual } from "crypto";
 import { readFileSync, existsSync } from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
