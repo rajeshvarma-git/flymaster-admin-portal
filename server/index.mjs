@@ -6516,9 +6516,12 @@ loadEnv();
 const IS_PRODUCTION = process.env.NODE_ENV === "production";
 
 if (IS_PRODUCTION) {
-  const missing = ["DATABASE_URL", "JWT_SECRET"].filter((key) => !process.env[key]);
+  const missing = ["DATABASE_URL"].filter((key) => !process.env[key]);
   if (missing.length) {
-    console.error(`Refusing to start: ${missing.join(" and ")} must be set in production.`);
+    console.error(
+      `Refusing to start: ${missing.join(" and ")} must be set in production.\n` +
+        "Railway: Service → Variables → add DATABASE_URL (Postgres plugin → Connect).",
+    );
     process.exit(1);
   }
 }
@@ -6537,7 +6540,10 @@ const ADMIN_SIGNUP_CODE = process.env.ADMIN_SIGNUP_CODE || "";
 
 const pool = new pg.Pool({
   connectionString: DATABASE_URL,
-  ssl: /supabase\.co|neon\.tech|amazonaws\.com/.test(DATABASE_URL) ? { rejectUnauthorized: false } : undefined,
+  ssl:
+    IS_PRODUCTION && !/127\.0\.0\.1|localhost/.test(DATABASE_URL)
+      ? { rejectUnauthorized: false }
+      : undefined,
 });
 
 function hashPassword(password) {
