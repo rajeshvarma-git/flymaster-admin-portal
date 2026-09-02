@@ -6513,20 +6513,35 @@ function loadEnv() {
 
 loadEnv();
 
-const IS_PRODUCTION = process.env.NODE_ENV === "production";
+const IS_RAILWAY = Boolean(process.env.RAILWAY_ENVIRONMENT);
+const IS_PRODUCTION = process.env.NODE_ENV === "production" || IS_RAILWAY;
+
+function resolveDatabaseUrl() {
+  const configured = String(process.env.DATABASE_URL || "").trim();
+  if (configured) return configured;
+  if (IS_PRODUCTION) return "";
+  return "postgresql://postgres:postgres@127.0.0.1:5433/flymasters";
+}
+
+const DATABASE_URL = resolveDatabaseUrl();
 
 if (IS_PRODUCTION) {
-  const missing = ["DATABASE_URL"].filter((key) => !process.env[key]);
-  if (missing.length) {
+  if (!DATABASE_URL) {
     console.error(
-      `Refusing to start: ${missing.join(" and ")} must be set in production.\n` +
-        "Railway: Service → Variables → add DATABASE_URL (Postgres plugin → Connect).",
+      "Refusing to start: DATABASE_URL must be set in production.\n" +
+        "Railway: click + New → Database → PostgreSQL, then in your web service go to Variables → Add Reference → Postgres → DATABASE_URL.",
+    );
+    process.exit(1);
+  }
+  if (/127\.0\.0\.1|localhost/i.test(DATABASE_URL)) {
+    console.error(
+      "Refusing to start: DATABASE_URL points to localhost and cannot work on Railway.\n" +
+        "Replace it with your Railway Postgres reference (${{Postgres.DATABASE_URL}}) or a cloud database URL (Supabase, Neon, etc.).",
     );
     process.exit(1);
   }
 }
 
-const DATABASE_URL = process.env.DATABASE_URL || "postgresql://postgres:postgres@127.0.0.1:5433/flymasters";
 const JWT_SECRET = process.env.JWT_SECRET || "flymasters-admin-dev-secret";
 const PORT = Number(process.env.PORT || process.env.API_PORT || 8788);
 const ADMIN_ID = "local-admin-1";
