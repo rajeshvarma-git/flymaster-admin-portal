@@ -273,13 +273,13 @@ export default function Dashboard() {
       </div>
 
       <Card className="mt-4 border-sky-100 bg-sky-50/50 p-4 text-sm text-slate-700">
-        <strong>Flymaster flow:</strong> signup creates a hot lead → telecaller calls, qualifies and converts → you assign a country counselor → documents, applications, shortlists. Leads are read-only here; only the telecaller converts.
+        <strong>Flymaster flow:</strong> student portal signup creates a hot lead → you assign a telecaller → telecaller calls, qualifies and converts → you assign a country counselor → documents, applications, shortlists.
       </Card>
 
       {stranded.length > 0 && (
         <Card className="mt-4 border-rose-200 bg-rose-50 p-4 text-sm text-rose-800">
-          <strong>{stranded.length} lead{stranded.length === 1 ? "" : "s"} could not be given to a telecaller.</strong>{" "}
-          Leads are normally handled entirely in the telecaller portal. These reached nobody, so they need you.{" "}
+          <strong>{stranded.length} lead{stranded.length === 1 ? "" : "s"} waiting for a telecaller.</strong>{" "}
+          Student portal signups appear here until you assign someone.{" "}
           <Link to="/admin/alerts" className="font-semibold underline">Open Lead alerts</Link>
         </Card>
       )}

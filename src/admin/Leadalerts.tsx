@@ -1135,7 +1135,7 @@ export default function LeadAlerts() {
     setBusy(true);
     setError("");
     try {
-      await api(`/leads/${lead.id}`, { method: "PATCH", body: { assigned_telecaller_id: telecallerId } });
+      await api(`/leads/${lead.id}`, { method: "PATCH", body: { assigned_telecaller_id: telecallerId, status: "assigned" } });
       await refreshStore();
       await loadStatus();
     } catch (err) {
@@ -1194,10 +1194,12 @@ export default function LeadAlerts() {
             <p className="text-[11px] font-bold uppercase tracking-wider text-slate-400">Cooled last run</p>
             <p className="mt-1 text-xl font-bold tabular-nums">{status ? status.cooledCount : "—"}</p>
           </div>
-          <div>
-            <p className="text-[11px] font-bold uppercase tracking-wider text-slate-400">Auto-assigned</p>
-            <p className="mt-1 text-xl font-bold tabular-nums">{status ? status.assignedCount : "—"}</p>
-          </div>
+          {status?.autoAssign && (
+            <div>
+              <p className="text-[11px] font-bold uppercase tracking-wider text-slate-400">Auto-assigned</p>
+              <p className="mt-1 text-xl font-bold tabular-nums">{status ? status.assignedCount : "—"}</p>
+            </div>
+          )}
           <Button variant="secondary" size="sm" disabled={busy} onClick={() => void runNow()}>
             <RefreshCw className={`h-4 w-4 ${busy ? "animate-spin" : ""}`} /> Run check now
           </Button>
@@ -1311,7 +1313,7 @@ export default function LeadAlerts() {
             <div className="mt-3 space-y-3 text-sm">
               {[
                 ["bg-slate-300", "Grace period", "A brand new signup is left alone for a few minutes before anything is sent."],
-                ["bg-sky-500", "Auto-assign runs first", "Unowned leads go to the telecaller with the smallest open queue, so alerts only fire for leads that genuinely could not be placed."],
+                ["bg-sky-500", "Admin assigns telecaller", "When a student signs up on the portal, a hot lead appears here. You pick which telecaller gets it — nothing is assigned automatically."],
                 ["bg-amber-400", `First alert after ${interval}h`, "One digest to every admin naming who is waiting and for how long — not one message per lead."],
                 ["bg-rose-500", `Repeat at most every ${status?.repeatHours ?? 24}h`, "The same lead is never reported twice inside that window, however many checks run."],
                 ["bg-emerald-500", "Assigned — alerts stop", "The lead's alert record is deleted, so it will alert again from scratch if it is ever dropped."],

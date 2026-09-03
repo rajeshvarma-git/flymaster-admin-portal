@@ -7551,9 +7551,8 @@ async function loadState() {
   }
 
   // New hot leads created this pass get persisted to student_leads (not just held in
-  // memory for display) so autoAssignTelecallers() below can actually see and hand
-  // them to a telecaller. Without this they only ever show up in the admin CRM and
-  // never reach a telecaller's queue.
+  // memory for display) so admins can see and manually assign a telecaller from
+  // Lead alerts or Telecaller leads.
   const freshHotLeads = [];
   for (const person of directory) {
     if (!studentIds.has(person.user_id)) continue;
@@ -7592,8 +7591,6 @@ async function loadState() {
       }
       await jsonUpsert("student_leads", { ...lead });
     }
-    // Hand these to a telecaller now instead of leaving them for the next background sweep.
-    await autoAssignTelecallers().catch(() => {});
   }
 
   return {
@@ -8275,9 +8272,6 @@ app.post("/api/leads", auth, async (req, res) => {
   await jsonUpsert("student_leads", payload);
   if (telecallerId) {
     await notify(telecallerId, "New lead assigned", `${payload.first_name} ${payload.last_name} was assigned to you.`, "info", "/admin/leads");
-  } else {
-    // Place it now rather than making it wait for the next sweep.
-    await autoAssignTelecallers().catch(() => {});
   }
   res.json(payload);
 });
@@ -8849,9 +8843,9 @@ const ALERT_TABLE = "lead_alerts";
 // A lead that a telecaller has not spoken to within this many days goes cold on its own,
 // so nothing sits warm forever because somebody forgot to update it.
 const COLD_AFTER_DAYS = Number(process.env.LEAD_COLD_AFTER_DAYS || 2);
-// Unassigned leads are handed to the telecaller with the smallest open queue. Set
-// TELECALLER_AUTO_ASSIGN=false to keep it fully manual and rely on the alerts instead.
-const TELECALLER_AUTO_ASSIGN = String(process.env.TELECALLER_AUTO_ASSIGN || "true") !== "false";
+// Telecaller assignment is manual by default — an admin picks who gets each lead.
+// Set TELECALLER_AUTO_ASSIGN=true to hand unowned leads to the least-loaded telecaller.
+const TELECALLER_AUTO_ASSIGN = String(process.env.TELECALLER_AUTO_ASSIGN || "false") === "true";
 
 const alertStatus = {
   enabled: ALERT_INTERVAL_HOURS > 0,
@@ -8965,11 +8959,12 @@ async function coolStaleLeads(startedAt) {
 async function checkUnassignedLeads() {
   const startedAt = new Date().toISOString();
   try {
-    // Try to place the unowned leads before deciding who to complain about.
-    alertStatus.assignedCount = await autoAssignTelecallers().catch((error) => {
-      console.warn("[alerts] auto assign failed:", error.message);
-      return 0;
-    });
+    alertStatus.assignedCount = TELECALLER_AUTO_ASSIGN
+      ? await autoAssignTelecallers().catch((error) => {
+          console.warn("[alerts] auto assign failed:", error.message);
+          return 0;
+        })
+      : 0;
     const [leads, alerts, users] = await Promise.all([
       jsonTable("student_leads"),
       jsonTable(ALERT_TABLE),
