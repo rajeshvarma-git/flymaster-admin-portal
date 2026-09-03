@@ -8295,10 +8295,6 @@ app.patch("/api/leads/:id", auth, async (req, res) => {
   }
   const jsonLeads = await jsonTable("student_leads");
   const current = jsonLeads.find((row) => String(row.id) === String(req.params.id));
-  const currentlyLead = current && current.entity_type !== "student" && current.lead_status !== "converted";
-  if (currentlyLead) {
-    patch.assigned_counselor_id = null;
-  }
   const updated = await applyLeadPatch(req.params.id, patch);
   await syncOwnershipOnAssignment(current, updated);
   if (patch.assigned_telecaller_id) {
@@ -8552,21 +8548,27 @@ app.post("/api/users", auth, async (req, res) => {
   });
   if (role === "counselor") {
     const hash = await bcrypt.hash(password, 10);
+    const bio = String(req.body.bio || "").trim();
+    const specializations = Array.isArray(req.body.specializations)
+      ? req.body.specializations.map((item) => String(item).trim()).filter(Boolean)
+      : String(req.body.specializations || "Study Abroad").split(",").map((item) => item.trim()).filter(Boolean);
     const created = await pool.query(
-      `INSERT INTO counselor_users (id, email, password_hash, first_name, last_name, phone)
-       VALUES ($1,$2,$3,$4,$5,$6) ON CONFLICT (email) DO UPDATE SET
+      `INSERT INTO counselor_users (id, email, password_hash, first_name, last_name, phone, bio, specializations)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8) ON CONFLICT (email) DO UPDATE SET
          password_hash = EXCLUDED.password_hash,
          first_name = EXCLUDED.first_name,
          last_name = EXCLUDED.last_name,
-         phone = EXCLUDED.phone
+         phone = EXCLUDED.phone,
+         bio = EXCLUDED.bio,
+         specializations = EXCLUDED.specializations
        RETURNING *`,
-      [isUuid(id) ? id : crypto.randomUUID(), email, hash, firstName, lastName, phone],
+      [isUuid(id) ? id : crypto.randomUUID(), email, hash, firstName, lastName, phone, bio, specializations],
     );
     await jsonUpsert("counselors", {
       id: `counselor-${id}`,
       user_id: id,
       is_active: true,
-      specializations: String(req.body.specializations || "Study Abroad").split(",").map((item) => item.trim()).filter(Boolean),
+      specializations,
       created_at: new Date().toISOString(),
       updated_at: new Date().toISOString(),
     });

@@ -68,6 +68,12 @@ export function isConvertedStudent(lead: { entity_type?: string; lead_status?: s
   return lead.entity_type === "student" || lead.lead_status === "converted";
 }
 
+const PORTAL_SOURCES = new Set(["student_site", "student_chat"]);
+
+export function isPortalSignup(lead: { lead_source?: string }) {
+  return PORTAL_SOURCES.has(String(lead.lead_source || ""));
+}
+
 export function personName(
   people: Array<{ user_id?: string; id?: string; first_name?: string; last_name?: string; email?: string }>,
   id?: string | null,

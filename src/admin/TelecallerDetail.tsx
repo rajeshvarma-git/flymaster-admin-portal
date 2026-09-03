@@ -10,6 +10,12 @@ import type { Lead } from "@/lib/types";
 
 const STALE_DAYS = 2;
 type Tab = "open" | "converted" | "calls" | "chats";
+type LeadDetailTab = "overview" | "telecaller";
+
+function leadDetailUrl(leadId: string, detailTab: LeadDetailTab, telecallerId: string) {
+  const params = new URLSearchParams({ tab: detailTab, from: `telecaller/${telecallerId}` });
+  return `/admin/students/${leadId}?${params.toString()}`;
+}
 
 function daysSince(value?: string | null) {
   if (!value) return null;
@@ -204,8 +210,11 @@ export default function TelecallerDetail() {
                     key={lead.id}
                     className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 px-5 py-4 last:border-b-0"
                   >
-                    <div className="min-w-0">
-                      <p className="font-semibold">
+                    <Link
+                      to={leadDetailUrl(lead.id, "overview", telecaller.id)}
+                      className="min-w-0 flex-1 transition hover:opacity-80"
+                    >
+                      <p className="font-semibold text-sky-700 hover:underline">
                         {displayName(lead.first_name, lead.last_name, lead.email)}
                       </p>
                       <p className="text-sm text-slate-500">
@@ -214,7 +223,7 @@ export default function TelecallerDetail() {
                       <p className={`mt-1 text-xs ${wait.late ? "font-semibold text-rose-600" : "text-slate-400"}`}>
                         {wait.text} · {parseCalls(lead).length} call{parseCalls(lead).length === 1 ? "" : "s"} logged
                       </p>
-                    </div>
+                    </Link>
                     <Badge value={lead.lead_status || "warm"} />
                   </div>
                 );
@@ -272,12 +281,15 @@ export default function TelecallerDetail() {
                     key={`${entry.lead.id}-${index}`}
                     className="flex flex-wrap items-start justify-between gap-3 border-b border-slate-100 px-5 py-4 last:border-b-0"
                   >
-                    <div className="min-w-0">
-                      <p className="text-sm font-semibold">
+                    <Link
+                      to={leadDetailUrl(entry.lead.id, "overview", telecaller.id)}
+                      className="min-w-0 flex-1 transition hover:opacity-80"
+                    >
+                      <p className="text-sm font-semibold text-sky-700 hover:underline">
                         {displayName(entry.lead.first_name, entry.lead.last_name, entry.lead.email)}
                       </p>
                       <p className="mt-0.5 text-sm text-slate-600">{entry.text}</p>
-                    </div>
+                    </Link>
                     <span className="shrink-0 text-xs text-slate-400">{entry.stamp}</span>
                   </div>
                 ))}
@@ -292,11 +304,14 @@ export default function TelecallerDetail() {
             </Card>
           ) : (
             <div className="space-y-4">
-              {chatThreads.map(({ conv, lead, msgs }) => (
+              {chatThreads.map(({ conv, lead, msgs }) => {
+                const profileId = lead?.id || conv.student_id;
+                const profileUrl = leadDetailUrl(profileId, "telecaller", telecaller.id);
+                return (
                 <Card key={conv.id} className="overflow-hidden">
                   <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-200 px-4 py-3">
-                    <div>
-                      <p className="text-sm font-semibold">
+                    <Link to={profileUrl} className="min-w-0 transition hover:opacity-80">
+                      <p className="text-sm font-semibold text-sky-700 hover:underline">
                         {lead
                           ? displayName(lead.first_name, lead.last_name, lead.email)
                           : "Unknown student"}
@@ -305,12 +320,10 @@ export default function TelecallerDetail() {
                         {msgs.length} message{msgs.length === 1 ? "" : "s"}
                         {conv.last_message_at ? ` · Last ${whenLabel(conv.last_message_at)}` : ""}
                       </p>
-                    </div>
-                    {lead && (
-                      <Link to={`/admin/students/${lead.id}`} className="text-xs font-semibold text-sky-600">
-                        Open student
-                      </Link>
-                    )}
+                    </Link>
+                    <Link to={profileUrl} className="text-xs font-semibold text-sky-600 hover:underline">
+                      View lead profile
+                    </Link>
                   </div>
                   <div className="flex max-h-64 flex-col gap-2 overflow-y-auto bg-slate-50 p-4">
                     {msgs.map((msg) => {
@@ -335,7 +348,8 @@ export default function TelecallerDetail() {
                     })}
                   </div>
                 </Card>
-              ))}
+                );
+              })}
             </div>
           ))}
       </div>

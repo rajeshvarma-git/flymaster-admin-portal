@@ -1942,7 +1942,7 @@
 // }
 
 import { useEffect, useMemo, useState } from "react";
-import { Link, useParams } from "react-router-dom";
+import { Link, useParams, useSearchParams } from "react-router-dom";
 import { format } from "date-fns";
 import { ArrowLeft, BookOpen, FileText, MessageCircle, MessagesSquare, PhoneCall, University, User } from "lucide-react";
 import { api } from "@/lib/api";
@@ -1976,6 +1976,12 @@ interface ChecklistResponse {
 
 const SILENT_DAYS = 7;
 type Tab = "overview" | "documents" | "applications" | "shortlists" | "chat" | "telecaller" | "ai";
+const TAB_KEYS: Tab[] = ["overview", "documents", "applications", "shortlists", "chat", "telecaller", "ai"];
+
+function parseTab(value: string | null): Tab {
+  if (value && TAB_KEYS.includes(value as Tab)) return value as Tab;
+  return "overview";
+}
 
 function daysSince(value?: string | null) {
   if (!value) return null;
@@ -2014,13 +2020,32 @@ function docBadge(status: string) {
 
 export default function StudentDetail() {
   const { id = "" } = useParams();
+  const [searchParams, setSearchParams] = useSearchParams();
   const store = useAdminStore();
-  const [tab, setTab] = useState<Tab>("overview");
+  const [tab, setTab] = useState<Tab>(() => parseTab(searchParams.get("tab")));
   const [busyId, setBusyId] = useState<string | null>(null);
   const [pickedCounselor, setPickedCounselor] = useState("");
   const [pickedTelecaller, setPickedTelecaller] = useState("");
   const [checklist, setChecklist] = useState<ChecklistResponse | null>(null);
   const [error, setError] = useState("");
+
+  const from = searchParams.get("from");
+  const backTo = from?.startsWith("telecaller/")
+    ? `/admin/telecallers/${from.slice("telecaller/".length)}`
+    : "/admin/students";
+  const backLabel = from?.startsWith("telecaller/") ? "Back to telecaller" : "Back to students";
+
+  useEffect(() => {
+    setTab(parseTab(searchParams.get("tab")));
+  }, [searchParams]);
+
+  const selectTab = (key: Tab) => {
+    setTab(key);
+    const next = new URLSearchParams(searchParams);
+    if (key === "overview") next.delete("tab");
+    else next.set("tab", key);
+    setSearchParams(next, { replace: true });
+  };
 
   const student = store.leads.find((lead) => lead.id === id || lead.user_id === id) || null;
 
@@ -2076,8 +2101,8 @@ export default function StudentDetail() {
   if (!student) {
     return (
       <div>
-        <Link to="/admin/students" className="mb-4 inline-flex items-center gap-2 text-sm text-slate-600 hover:text-sky-600">
-          <ArrowLeft className="h-4 w-4" /> Back to students
+        <Link to={backTo} className="mb-4 inline-flex items-center gap-2 text-sm text-slate-600 hover:text-sky-600">
+          <ArrowLeft className="h-4 w-4" /> {backLabel}
         </Link>
         <Card className="p-8 text-center text-sm text-slate-500">No student found with this id.</Card>
       </div>
@@ -2254,8 +2279,8 @@ export default function StudentDetail() {
 
   return (
     <div>
-      <Link to="/admin/students" className="mb-4 inline-flex items-center gap-2 text-sm text-slate-600 hover:text-sky-600">
-        <ArrowLeft className="h-4 w-4" /> Back to students
+      <Link to={backTo} className="mb-4 inline-flex items-center gap-2 text-sm text-slate-600 hover:text-sky-600">
+        <ArrowLeft className="h-4 w-4" /> {backLabel}
       </Link>
 
       <Card className="p-5">
@@ -2268,8 +2293,12 @@ export default function StudentDetail() {
               <h1 className="text-2xl font-bold">
                 {displayName(student.first_name, student.last_name, student.email)}
               </h1>
-              <Badge value="converted" />
-              {!student.assigned_counselor_id && (
+              {isConvertedStudent(student) ? (
+                <Badge value="converted" />
+              ) : (
+                <Badge value={student.lead_status || "warm"} />
+              )}
+              {isConvertedStudent(student) && !student.assigned_counselor_id && (
                 <Badge value="unassigned" className="normal-case">No counselor</Badge>
               )}
             </div>
@@ -2450,7 +2479,7 @@ export default function StudentDetail() {
         {tabs.map(({ key, label, count, icon: Icon }) => (
           <button
             key={key}
-            onClick={() => setTab(key)}
+            onClick={() => selectTab(key)}
             className={`-mb-px flex shrink-0 items-center gap-2 border-b-2 px-3.5 py-2.5 text-sm font-semibold transition ${
               tab === key ? "border-sky-500 text-navy-900" : "border-transparent text-slate-500 hover:text-navy-900"
             }`}
