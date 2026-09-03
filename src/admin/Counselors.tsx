@@ -64,15 +64,17 @@ export default function Counselors() {
         <div>
           <h1 className="text-2xl font-bold">Counselors</h1>
           <p className="text-slate-600">
-            Country specialists assigned after student conversion. Open a counselor to see their students,
-            conversations and documents.
+            Country specialists for students and open leads. Open a counselor to see their students, conversations,
+            and documents.
           </p>
         </div>
       </div>
 
       <Card className="overflow-hidden">
         {store.counselors.filter((counselor) => counselor.is_active !== false).map((counselor) => {
-          const students = store.leads.filter((lead) => isConvertedStudent(lead) && counselorOwns(counselor, lead.assigned_counselor_id));
+          const assigned = store.leads.filter((lead) => counselorOwns(counselor, lead.assigned_counselor_id));
+          const students = assigned.filter((lead) => isConvertedStudent(lead));
+          const leads = assigned.filter((lead) => !isConvertedStudent(lead));
           const pending = store.documents.filter(
             (doc) =>
               !doc.archived &&
@@ -99,6 +101,8 @@ export default function Counselors() {
                 </span>
                 <span className="mt-1 block text-xs text-slate-400">
                   {students.length} student{students.length === 1 ? "" : "s"}
+                  {" · "}
+                  {leads.length} lead{leads.length === 1 ? "" : "s"}
                   {pending > 0 && ` · ${pending} document${pending === 1 ? "" : "s"} to review`}
                   {countries.length ? ` · ${countries.join(", ")}` : " · No country set"}
                 </span>

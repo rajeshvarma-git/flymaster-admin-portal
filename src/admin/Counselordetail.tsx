@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { format } from "date-fns";
-import { ArrowLeft, ArrowRightLeft, FileText, MessageCircle, Trash2, Users } from "lucide-react";
+import { ArrowLeft, ArrowRightLeft, FileText, MessageCircle, MessageSquare, PhoneCall, Trash2, Users } from "lucide-react";
 import { api } from "@/lib/api";
 import { refreshStore, useAdminStore } from "@/lib/store";
 import { counselorOwns, displayName, initials, isConvertedStudent, studentOwns, telecallerLabel } from "@/lib/utils";
@@ -12,7 +12,43 @@ import { Select } from "@/components/ui/Field";
 import type { DocumentRow, Lead } from "@/lib/types";
 
 const SILENT_DAYS = 7;
-type Tab = "students" | "conversations" | "documents";
+type Tab = "students" | "leads" | "conversations" | "lead_chats" | "calls" | "documents";
+
+interface CallEntry {
+  lead: Lead;
+  stamp: string;
+  text: string;
+  sortKey: string;
+}
+
+function parseCalls(lead: Lead): CallEntry[] {
+  if (!lead.notes) return [];
+  return lead.notes
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((line) => {
+      const match = line.match(/^\[(.+?)\]\s*(.*)$/);
+      const stamp = match ? match[1] : "";
+      const text = match ? match[2] : line;
+      const parsed = stamp ? new Date(stamp) : null;
+      return {
+        lead,
+        stamp: stamp || "Undated",
+        text,
+        sortKey: parsed && !Number.isNaN(parsed.getTime()) ? parsed.toISOString() : "",
+      };
+    });
+}
+
+function waitLabel(lead: Lead) {
+  if (!lead.last_contact_date) {
+    const d = daysSince(lead.created_at);
+    return { text: d === null ? "Never called" : `Never called · ${d}d old`, late: (d ?? 0) >= 2 };
+  }
+  const d = daysSince(lead.last_contact_date) ?? 0;
+  return { text: d === 0 ? "Called today" : `Last called ${d}d ago`, late: d >= 2 };
+}
 
 function daysSince(value?: string | null) {
   if (!value) return null;
@@ -66,6 +102,45 @@ export default function CounselorDetail() {
         : [],
     [counselor, store.leads],
   );
+
+  const leads = useMemo(
+    () =>
+      counselor
+        ? store.leads
+            .filter(
+              (lead) =>
+                !isConvertedStudent(lead) && counselorOwns(counselor, lead.assigned_counselor_id),
+            )
+            .sort((a, b) => String(a.created_at || "").localeCompare(String(b.created_at || "")))
+        : [],
+    [counselor, store.leads],
+  );
+
+  const assigned = useMemo(
+    () => (counselor ? store.leads.filter((lead) => counselorOwns(counselor, lead.assigned_counselor_id)) : []),
+    [counselor, store.leads],
+  );
+
+  const calls = useMemo(
+    () => assigned.flatMap(parseCalls).sort((a, b) => b.sortKey.localeCompare(a.sortKey)),
+    [assigned],
+  );
+
+  const leadChatThreads = useMemo(() => {
+    if (!counselor) return [];
+    return store.telecallerConversations
+      .filter((conv) => assigned.some((lead) => studentOwns(lead, conv.student_id)))
+      .map((conv) => {
+        const lead = assigned.find((row) => studentOwns(row, conv.student_id)) || null;
+        const msgs = store.telecallerMessages
+          .filter((msg) => msg.conversation_id === conv.id)
+          .sort((a, b) => String(a.created_at || "").localeCompare(String(b.created_at || "")));
+        return { conv, lead, msgs };
+      })
+      .sort((a, b) => String(b.conv.last_message_at || "").localeCompare(String(a.conv.last_message_at || "")));
+  }, [counselor, assigned, store.telecallerConversations, store.telecallerMessages]);
+
+  const leadChatCount = leadChatThreads.reduce((sum, row) => sum + row.msgs.length, 0);
 
   const docsFor = (student: Lead) =>
     store.documents.filter((doc) => !doc.archived && studentOwns(student, doc.user_id));
@@ -162,13 +237,16 @@ export default function CounselorDetail() {
   };
 
   const removeCounselor = async () => {
-    if (students.length > 0 && !transferTargetId) {
-      setError(`This counselor still has ${students.length} student(s). Pick someone to transfer them to before removing.`);
+    if ((students.length > 0 || leads.length > 0) && !transferTargetId) {
+      setError(
+        `This counselor still has ${students.length} student(s) and ${leads.length} lead(s). Pick someone to transfer them to before removing.`,
+      );
       return;
     }
+    const total = students.length + leads.length;
     const message =
-      students.length > 0
-        ? `Transfer ${students.length} student(s) to the selected counselor and remove ${displayName(counselor.first_name, counselor.last_name, counselor.email)}?`
+      total > 0
+        ? `Transfer ${students.length} student(s) and ${leads.length} lead(s) to the selected counselor and remove ${displayName(counselor.first_name, counselor.last_name, counselor.email)}?`
         : `Remove ${displayName(counselor.first_name, counselor.last_name, counselor.email)} from the counselor list?`;
     if (!window.confirm(message)) return;
 
@@ -190,6 +268,7 @@ export default function CounselorDetail() {
 
   const stats: Array<{ label: string; value: string | number; alert?: boolean }> = [
     { label: "Students", value: students.length },
+    { label: "Leads", value: leads.length, alert: leads.length > 0 },
     { label: "Documents to review", value: pendingDocs.length, alert: pendingDocs.length > 0 },
     { label: "Approved documents", value: allDocs.filter((doc) => doc.status === "approved").length },
     {
@@ -201,7 +280,10 @@ export default function CounselorDetail() {
 
   const tabs: Array<{ key: Tab; label: string; count: number; icon: typeof Users }> = [
     { key: "students", label: "Students", count: students.length, icon: Users },
-    { key: "conversations", label: "Conversations", count: withMessages.length, icon: MessageCircle },
+    { key: "leads", label: "Leads", count: leads.length, icon: PhoneCall },
+    { key: "conversations", label: "Student chats", count: withMessages.length, icon: MessageCircle },
+    { key: "lead_chats", label: "Lead chats", count: leadChatCount, icon: MessageSquare },
+    { key: "calls", label: "Call history", count: calls.length, icon: PhoneCall },
     { key: "documents", label: "Documents", count: allDocs.length, icon: FileText },
   ];
 
@@ -242,8 +324,9 @@ export default function CounselorDetail() {
             </div>
             <p className="mt-3 text-xs text-slate-400">
               {counselor.created_at ? `Joined ${format(new Date(counselor.created_at), "PP")} · ` : ""}
-              {students.length} student{students.length === 1 ? "" : "s"} · {withMessages.length} active conversation
-              {withMessages.length === 1 ? "" : "s"}
+              {students.length} student{students.length === 1 ? "" : "s"} · {leads.length} lead
+              {leads.length === 1 ? "" : "s"} · {withMessages.length} student chat
+              {withMessages.length === 1 ? "" : "s"} · {calls.length} call{calls.length === 1 ? "" : "s"} logged
             </p>
             {counselor.bio && <p className="mt-3 text-sm text-slate-600">{counselor.bio}</p>}
           </div>
@@ -301,16 +384,17 @@ export default function CounselorDetail() {
             {busyAction === "remove" ? "Removing..." : "Remove counselor"}
           </Button>
         </div>
-        {students.length > 0 && (
+        {(students.length > 0 || leads.length > 0) && (
           <p className="mt-3 text-xs text-slate-500">
-            {students.length} student{students.length === 1 ? "" : "s"} will move with their chat history when you transfer or remove.
+            {students.length} student{students.length === 1 ? "" : "s"} and {leads.length} lead
+            {leads.length === 1 ? "" : "s"} will move with their chat history when you transfer or remove.
           </p>
         )}
       </Card>
 
       {error && <Card className="mt-4 border-rose-200 bg-rose-50 p-4 text-sm text-rose-800">{error}</Card>}
 
-      <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+      <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
         {stats.map((stat) => (
           <Card key={stat.label} className="p-4">
             <div className={`h-4 w-4 rounded-md ${stat.alert ? "bg-rose-100" : "bg-sky-100"}`} />
@@ -320,7 +404,7 @@ export default function CounselorDetail() {
         ))}
       </div>
 
-      <div className="mt-6 flex gap-1 border-b border-slate-200">
+      <div className="mt-6 flex gap-1 overflow-x-auto border-b border-slate-200">
         {tabs.map(({ key, label, count, icon: Icon }) => (
           <button
             key={key}
@@ -419,6 +503,134 @@ export default function CounselorDetail() {
             </Card>
           )
         )}
+
+        {tab === "leads" &&
+          (leads.length === 0 ? (
+            <Card className="p-8 text-center text-sm text-slate-500">
+              No open leads assigned yet. Assign leads from Lead Alerts.
+            </Card>
+          ) : (
+            <Card className="overflow-hidden">
+              {leads.map((lead) => {
+                const wait = waitLabel(lead);
+                const callCount = parseCalls(lead).length;
+                const chatCount = leadChatThreads.find((row) => row.lead?.id === lead.id)?.msgs.length ?? 0;
+                return (
+                  <Link
+                    key={lead.id}
+                    to={`/admin/students/${lead.id}`}
+                    className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 px-5 py-4 transition last:border-b-0 hover:bg-slate-50"
+                  >
+                    <div className="min-w-0">
+                      <p className="font-semibold text-sky-700">
+                        {displayName(lead.first_name, lead.last_name, lead.email)}
+                      </p>
+                      <p className="text-sm text-slate-500">
+                        {lead.phone || "No phone"} · {(lead.preferred_countries || []).join(", ") || "No country"}
+                      </p>
+                      <p className="mt-1 text-xs text-slate-400">
+                        Telecaller: {telecallerLabel(store.telecallers, lead.assigned_telecaller_id)} ·{" "}
+                        {callCount} call{callCount === 1 ? "" : "s"} · {chatCount} chat message
+                        {chatCount === 1 ? "" : "s"}
+                      </p>
+                      <p className={`mt-0.5 text-xs ${wait.late ? "font-semibold text-rose-600" : "text-slate-400"}`}>
+                        {wait.text} · Signed up {whenLabel(lead.created_at) || "recently"}
+                      </p>
+                    </div>
+                    <Badge value={lead.lead_status || "hot"} />
+                  </Link>
+                );
+              })}
+            </Card>
+          ))}
+
+        {tab === "calls" &&
+          (calls.length === 0 ? (
+            <Card className="p-8 text-center text-sm text-slate-500">
+              No calls logged yet for assigned leads. Call notes appear when a telecaller logs a call.
+            </Card>
+          ) : (
+            <>
+              <Card className="mb-4 border-sky-100 bg-sky-50 p-4 text-xs text-slate-700">
+                Phone call notes logged for this counselor&apos;s assigned leads, newest first.
+              </Card>
+              <Card className="overflow-hidden">
+                {calls.map((entry, index) => (
+                  <div
+                    key={`${entry.lead.id}-${index}`}
+                    className="flex flex-wrap items-start justify-between gap-3 border-b border-slate-100 px-5 py-4 last:border-b-0"
+                  >
+                    <Link to={`/admin/students/${entry.lead.id}`} className="min-w-0 flex-1 transition hover:opacity-80">
+                      <p className="text-sm font-semibold text-sky-700 hover:underline">
+                        {displayName(entry.lead.first_name, entry.lead.last_name, entry.lead.email)}
+                      </p>
+                      <p className="mt-0.5 text-sm text-slate-600">{entry.text}</p>
+                      <p className="mt-1 text-xs text-slate-400">
+                        Telecaller: {telecallerLabel(store.telecallers, entry.lead.assigned_telecaller_id)}
+                      </p>
+                    </Link>
+                    <span className="shrink-0 text-xs text-slate-400">{entry.stamp}</span>
+                  </div>
+                ))}
+              </Card>
+            </>
+          ))}
+
+        {tab === "lead_chats" &&
+          (leadChatThreads.length === 0 ? (
+            <Card className="p-8 text-center text-sm text-slate-500">
+              No lead chat conversations yet. Messages appear when a telecaller chats with assigned leads.
+            </Card>
+          ) : (
+            <div className="space-y-4">
+              {leadChatThreads.map(({ conv, lead, msgs }) => (
+                <Card key={conv.id} className="overflow-hidden">
+                  <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-200 px-4 py-3">
+                    <Link
+                      to={lead ? `/admin/students/${lead.id}` : "#"}
+                      className="min-w-0 transition hover:opacity-80"
+                    >
+                      <p className="text-sm font-semibold text-sky-700 hover:underline">
+                        {lead ? displayName(lead.first_name, lead.last_name, lead.email) : "Unknown lead"}
+                      </p>
+                      <p className="text-xs text-slate-500">
+                        {msgs.length} message{msgs.length === 1 ? "" : "s"}
+                        {conv.last_message_at ? ` · Last ${whenLabel(conv.last_message_at)}` : ""}
+                        {lead ? ` · Telecaller: ${telecallerLabel(store.telecallers, lead.assigned_telecaller_id)}` : ""}
+                      </p>
+                    </Link>
+                    {lead && (
+                      <Link to={`/admin/students/${lead.id}`} className="text-xs font-semibold text-sky-600 hover:underline">
+                        View lead profile
+                      </Link>
+                    )}
+                  </div>
+                  <div className="flex max-h-64 flex-col gap-2 overflow-y-auto bg-slate-50 p-4">
+                    {msgs.map((msg) => {
+                      const fromStudent = lead ? studentOwns(lead, msg.sender_id) : false;
+                      return (
+                        <div
+                          key={msg.id}
+                          className={`max-w-[80%] rounded-2xl px-3 py-2 text-sm ${
+                            fromStudent
+                              ? "self-start rounded-bl-sm border border-slate-200 bg-white"
+                              : "self-end rounded-br-sm bg-sky-600 text-white"
+                          }`}
+                        >
+                          <p>{msg.message}</p>
+                          {msg.created_at && (
+                            <p className={`mt-1 text-[10px] ${fromStudent ? "text-slate-400" : "text-white/60"}`}>
+                              {format(new Date(msg.created_at), "PP p")}
+                            </p>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                </Card>
+              ))}
+            </div>
+          ))}
 
         {tab === "conversations" && (
           students.length === 0 ? (
