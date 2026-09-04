@@ -533,7 +533,7 @@ import {
 } from "lucide-react";
 import { useState } from "react";
 import { useAuth } from "@/context/AuthContext";
-import { displayName, initials, isConvertedStudent } from "@/lib/utils";
+import { displayName, initials, isConvertedStudent, openLeadNeedsOwner } from "@/lib/utils";
 import { Button } from "@/components/ui/Button";
 import { useAdminStore } from "@/lib/store";
 
@@ -585,7 +585,7 @@ export default function AdminLayout() {
   const pendingDocs = store.documents.filter((item) => item.status === "uploaded" || item.status === "pending").length;
   const pendingLeave = store.leave.filter((item) => item.status === "pending").length;
   const unassigned = store.leads.filter((item) => isConvertedStudent(item) && !item.assigned_counselor_id).length;
-  const noTelecaller = store.leads.filter((item) => !isConvertedStudent(item) && !item.assigned_telecaller_id).length;
+  const noTelecaller = store.leads.filter((item) => openLeadNeedsOwner(item)).length;
 
   const Nav = () => (
     <>

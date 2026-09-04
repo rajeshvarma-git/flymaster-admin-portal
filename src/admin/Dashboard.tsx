@@ -225,7 +225,7 @@ import { Link } from "react-router-dom";
 import { BookOpen, FileText, Flame, GraduationCap, PhoneCall, Target, Users } from "lucide-react";
 import { format } from "date-fns";
 import { useAdminStore } from "@/lib/store";
-import { counselorLabel, counselorOwns, displayName, isConvertedStudent, telecallerLabel } from "@/lib/utils";
+import { counselorLabel, counselorOwns, displayName, isConvertedStudent, openLeadNeedsOwner, telecallerLabel } from "@/lib/utils";
 import { Badge } from "@/components/ui/Badge";
 import { Card } from "@/components/ui/Card";
 
@@ -237,9 +237,7 @@ export default function Dashboard() {
   const hot = leads.filter((lead) => lead.lead_status === "hot");
   const students = store.leads.filter((lead) => isConvertedStudent(lead));
   const unassignedCounselor = students.filter((lead) => !lead.assigned_counselor_id);
-  const stranded = store.leads.filter(
-    (lead) => !isConvertedStudent(lead) && !lead.assigned_telecaller_id,
-  );
+  const stranded = store.leads.filter((lead) => openLeadNeedsOwner(lead));
   const pendingDocs = store.documents.filter((item) => !item.archived && (item.status === "uploaded" || item.status === "pending"));
   const pendingApps = store.applications.filter((item) => item.status === "pending_counselor" || item.status === "submitted");
   const withCounselor = students.filter((lead) => lead.assigned_counselor_id).length;
@@ -273,13 +271,13 @@ export default function Dashboard() {
       </div>
 
       <Card className="mt-4 border-sky-100 bg-sky-50/50 p-4 text-sm text-slate-700">
-        <strong>Flymaster flow:</strong> student portal signup creates a hot lead → you assign a telecaller → telecaller calls, qualifies and converts → you assign a country counselor → documents, applications, shortlists.
+        <strong>Flymaster flow:</strong> student portal signup creates a hot lead → assign a telecaller or counselor → telecaller qualifies and converts → assign a country counselor after conversion if needed.
       </Card>
 
       {stranded.length > 0 && (
         <Card className="mt-4 border-rose-200 bg-rose-50 p-4 text-sm text-rose-800">
-          <strong>{stranded.length} lead{stranded.length === 1 ? "" : "s"} waiting for a telecaller.</strong>{" "}
-          Student portal signups appear here until you assign someone.{" "}
+          <strong>{stranded.length} lead{stranded.length === 1 ? "" : "s"} waiting for assignment.</strong>{" "}
+          Student portal signups appear here until you assign a telecaller or counselor.{" "}
           <Link to="/admin/alerts" className="font-semibold underline">Open Lead alerts</Link>
         </Card>
       )}

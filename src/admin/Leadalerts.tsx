@@ -1009,7 +1009,17 @@ import { useEffect, useMemo, useState } from "react";
 import { AlarmClock, RefreshCw } from "lucide-react";
 import { api } from "@/lib/api";
 import { refreshStore, useAdminStore } from "@/lib/store";
-import { counselorLabel, displayName, initials, isConvertedStudent, isPortalSignup, suggestCounselorForCountries, telecallerLabel } from "@/lib/utils";
+import {
+  counselorLabel,
+  displayName,
+  initials,
+  isConvertedStudent,
+  isPortalSignup,
+  leadNeedsAssignment,
+  openLeadNeedsOwner,
+  suggestCounselorForCountries,
+  telecallerLabel,
+} from "@/lib/utils";
 import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
 import { Card } from "@/components/ui/Card";
@@ -1107,25 +1117,23 @@ export default function LeadAlerts() {
   const waiting = useMemo(
     () =>
       store.leads
-        .filter((lead) => {
-          const converted = isConvertedStudent(lead);
-          const needsTelecaller = !converted && !lead.assigned_telecaller_id;
-          const needsCounselor = !lead.assigned_counselor_id;
-          return needsTelecaller || needsCounselor;
-        })
+        .filter((lead) => leadNeedsAssignment(lead))
         .sort((a, b) => String(a.created_at || "").localeCompare(String(b.created_at || ""))),
     [store.leads],
   );
 
-  const needingTelecaller = waiting.filter((lead) => !isConvertedStudent(lead) && !lead.assigned_telecaller_id);
-  const needingCounselor = waiting.filter((lead) => !lead.assigned_counselor_id);
+  const needingOwner = waiting.filter((lead) => openLeadNeedsOwner(lead));
+  const needingCounselor = waiting.filter((lead) => isConvertedStudent(lead) && !lead.assigned_counselor_id);
 
   const counselorLoad = (id: string) =>
     store.leads.filter((lead) => lead.assigned_counselor_id === id).length;
 
-  const escalated = needingTelecaller.filter((lead) => (hoursSince(lead.created_at) ?? 0) >= ESCALATE_HOURS);
+  const escalated = needingOwner.filter((lead) => (hoursSince(lead.created_at) ?? 0) >= ESCALATE_HOURS);
   const alertFeed = store.notifications
-    .filter((row) => (row.title || "").toLowerCase().includes("telecaller"))
+    .filter((row) => {
+      const title = (row.title || "").toLowerCase();
+      return title.includes("telecaller") || title.includes("waiting for assignment");
+    })
     .sort((a, b) => String(b.created_at || "").localeCompare(String(a.created_at || "")))
     .slice(0, 25);
 
@@ -1184,8 +1192,8 @@ export default function LeadAlerts() {
         <div>
           <h1 className="text-2xl font-bold">Lead alerts</h1>
           <p className="text-slate-600">
-            Student portal signups and open leads appear here. Assign a telecaller for first contact, a counselor
-            for country support, or both — pick from the dropdowns below.
+            Student portal signups and open leads appear here. Assign a telecaller for first contact or a counselor
+            for country support — either one clears the lead from this queue.
           </p>
         </div>
       </div>
@@ -1252,7 +1260,7 @@ export default function LeadAlerts() {
       {escalated.length > 0 && (
         <Card className="mt-4 border-rose-200 bg-rose-50 p-4 text-sm text-rose-800">
           <strong>
-            {escalated.length} lead{escalated.length === 1 ? "" : "s"} ha{escalated.length === 1 ? "s" : "ve"} been waiting over {ESCALATE_HOURS} hours without a telecaller.
+            {escalated.length} lead{escalated.length === 1 ? "" : "s"} ha{escalated.length === 1 ? "s" : "ve"} been waiting over {ESCALATE_HOURS} hours without a telecaller or counselor.
           </strong>{" "}
           Assign a telecaller or counselor now.
         </Card>
@@ -1260,7 +1268,7 @@ export default function LeadAlerts() {
       {needingCounselor.length > 0 && (
         <Card className="mt-4 border-amber-200 bg-amber-50 p-4 text-sm text-amber-800">
           <strong>
-            {needingCounselor.length} student{needingCounselor.length === 1 ? "" : "s"} still need
+            {needingCounselor.length} converted student{needingCounselor.length === 1 ? "" : "s"} still need
             {needingCounselor.length === 1 ? "s" : ""} a counselor.
           </strong>{" "}
           Pick a counselor below and assign.
@@ -1269,7 +1277,7 @@ export default function LeadAlerts() {
 
       <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
         {[
-          { label: "Need telecaller", value: needingTelecaller.length, alert: needingTelecaller.length > 0 },
+          { label: "Need assignment", value: needingOwner.length, alert: needingOwner.length > 0 },
           { label: "Need counselor", value: needingCounselor.length, alert: needingCounselor.length > 0 },
           { label: `Escalated past ${ESCALATE_HOURS}h`, value: escalated.length, alert: escalated.length > 0 },
           { label: "Alerts in the log", value: alertFeed.length },
@@ -1325,8 +1333,8 @@ export default function LeadAlerts() {
               const hours = hoursSince(lead.created_at);
               const late = (hours ?? 0) >= ESCALATE_HOURS;
               const converted = isConvertedStudent(lead);
-              const needsTelecaller = !converted && !lead.assigned_telecaller_id;
-              const needsCounselor = !lead.assigned_counselor_id;
+              const needsOwner = openLeadNeedsOwner(lead);
+              const needsCounselor = converted && !lead.assigned_counselor_id;
               const suggested = suggestCounselorForCountries(store.counselors, lead.preferred_countries || []);
               const sourceLabel = isPortalSignup(lead) || lead.user_id
                 ? "Student portal"
@@ -1361,7 +1369,7 @@ export default function LeadAlerts() {
                           <>
                             {" · "}
                             Waiting {ageLabel(hours)}
-                            {late ? " · escalated" : ""}
+                            {late && needsOwner ? " · escalated" : ""}
                           </>
                         )}
                       </p>
@@ -1369,9 +1377,24 @@ export default function LeadAlerts() {
                   </div>
                   <div className="flex flex-wrap items-center gap-2">
                     <Badge value={converted ? "converted" : lead.lead_status || "hot"} />
-                    {needsTelecaller && (
+                    {needsOwner && (
                       <Button size="sm" disabled={busy || !telecallerId} onClick={() => void assignTelecaller(lead)}>
                         Assign telecaller
+                      </Button>
+                    )}
+                    {needsOwner && suggested && (
+                      <Button
+                        size="sm"
+                        variant="secondary"
+                        disabled={busy}
+                        onClick={() => void assignCounselor(lead, suggested.id)}
+                      >
+                        Assign counselor match
+                      </Button>
+                    )}
+                    {needsOwner && (
+                      <Button size="sm" variant="secondary" disabled={busy || !counselorId} onClick={() => void assignCounselor(lead)}>
+                        Assign counselor
                       </Button>
                     )}
                     {needsCounselor && suggested && (
@@ -1395,7 +1418,7 @@ export default function LeadAlerts() {
             })}
             {waiting.length === 0 && (
               <p className="p-8 text-center text-sm text-slate-500">
-                Every lead has a telecaller and counselor assigned. Nothing to alert.
+                Every lead has an owner assigned. Nothing to alert.
               </p>
             )}
           </Card>
@@ -1408,10 +1431,10 @@ export default function LeadAlerts() {
             <div className="mt-3 space-y-3 text-sm">
               {[
                 ["bg-slate-300", "Grace period", "A brand new signup is left alone for a few minutes before anything is sent."],
-                ["bg-sky-500", "Admin assigns telecaller & counselor", "When a student signs up on the portal, they appear here. Pick a telecaller for first contact and a counselor when they are ready — both dropdowns are always available above."],
+                ["bg-sky-500", "Admin assigns telecaller or counselor", "When a student signs up on the portal, they appear here. Pick a telecaller for first contact or a counselor for country support — either one removes them from this queue."],
                 ["bg-amber-400", `First alert after ${interval}h`, "One digest to every admin naming who is waiting and for how long — not one message per lead."],
                 ["bg-rose-500", `Repeat at most every ${status?.repeatHours ?? 24}h`, "The same lead is never reported twice inside that window, however many checks run."],
-                ["bg-emerald-500", "Assigned — alerts stop", "The lead's alert record is deleted, so it will alert again from scratch if it is ever dropped."],
+                ["bg-emerald-500", "Assigned — alerts stop", "Once a telecaller or counselor is assigned, the lead's alert record is deleted. It will alert again only if both are cleared."],
                 ["bg-slate-400", `Goes cold after ${status?.coldAfterDays ?? 2} days`, "Separately, any lead whose telecaller has logged no call in that time is set to cold and the telecaller is told."],
               ].map(([dot, title, body]) => (
                 <div key={title} className="flex gap-3 border-t border-slate-100 pt-3 first:border-t-0 first:pt-0">

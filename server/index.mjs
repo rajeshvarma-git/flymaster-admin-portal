@@ -2921,7 +2921,7 @@
 // // //     const open = leads.filter(
 // // //       (row) => row.entity_type !== "student" && row.lead_status !== "converted",
 // // //     );
-// // //     const unassigned = open.filter((row) => !row.assigned_telecaller_id);
+// // //     const unassigned = open.filter((row) => !row.assigned_telecaller_id && !row.assigned_counselor_id);
 // // //     const unassignedIds = new Set(unassigned.map((row) => String(row.id)));
 
 // // //     // Somebody picked these up. Forget them so they alert again if they are ever dropped.
@@ -4588,7 +4588,7 @@
 // //     const open = leads.filter(
 // //       (row) => row.entity_type !== "student" && row.lead_status !== "converted",
 // //     );
-// //     const unassigned = open.filter((row) => !row.assigned_telecaller_id);
+// //     const unassigned = open.filter((row) => !row.assigned_telecaller_id && !row.assigned_counselor_id);
 // //     const unassignedIds = new Set(unassigned.map((row) => String(row.id)));
 
 // //     // Somebody picked these up. Forget them so they alert again if they are ever dropped.
@@ -6389,7 +6389,7 @@
 //     const open = leads.filter(
 //       (row) => row.entity_type !== "student" && row.lead_status !== "converted",
 //     );
-//     const unassigned = open.filter((row) => !row.assigned_telecaller_id);
+//     const unassigned = open.filter((row) => !row.assigned_telecaller_id && !row.assigned_counselor_id);
 //     const unassignedIds = new Set(unassigned.map((row) => String(row.id)));
 
 //     // Somebody picked these up. Forget them so they alert again if they are ever dropped.
@@ -8234,6 +8234,7 @@ app.post("/api/leads", auth, async (req, res) => {
   const studentId = crypto.randomUUID();
   const countries = String(req.body.countries || "").split(",").map((item) => item.trim()).filter(Boolean);
   const telecallerId = req.body.telecallerId || null;
+  const counselorId = req.body.counselorId || null;
   const payload = {
     id: crypto.randomUUID(),
     user_id: studentId,
@@ -8249,9 +8250,9 @@ app.post("/api/leads", auth, async (req, res) => {
     lead_source: req.body.source || "manual",
     priority: req.body.priority || "medium",
     assigned_telecaller_id: telecallerId,
-    assigned_counselor_id: null,
+    assigned_counselor_id: counselorId,
     entity_type: "lead",
-    status: telecallerId ? "assigned" : "new",
+    status: telecallerId || counselorId ? "assigned" : "new",
     notes: req.body.notes || "",
     created_at: new Date().toISOString(),
   };
@@ -8260,18 +8261,29 @@ app.post("/api/leads", auth, async (req, res) => {
       `INSERT INTO student_leads (
         id, user_id, email, phone, first_name, last_name, preferred_countries, field_of_interest,
         academic_score, lead_status, lead_stage, lead_source, assigned_telecaller_id, assigned_counselor_id, entity_type, status, notes
-      ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'warm','warm',$10,$11,NULL,'lead',$12,$13)
+      ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'warm','warm',$10,$11,$12,'lead',$13,$14)
       ON CONFLICT (id) DO NOTHING`,
       [
         payload.id, studentId, payload.email, payload.phone, payload.first_name, payload.last_name, countries,
         payload.field_of_interest, payload.academic_score, payload.lead_source,
-        isUuid(telecallerId) ? telecallerId : null, payload.status, payload.notes,
+        isUuid(telecallerId) ? telecallerId : null,
+        isUuid(counselorId) ? counselorId : null,
+        payload.status, payload.notes,
       ],
     ).catch(() => {});
   }
   await jsonUpsert("student_leads", payload);
   if (telecallerId) {
     await notify(telecallerId, "New lead assigned", `${payload.first_name} ${payload.last_name} was assigned to you.`, "info", "/admin/leads");
+  }
+  if (counselorId) {
+    await notify(
+      counselorId,
+      "New lead assigned",
+      `${payload.first_name} ${payload.last_name} was assigned to you.`,
+      "info",
+      "/counselor/students",
+    );
   }
   res.json(payload);
 });
@@ -8977,7 +8989,7 @@ async function checkUnassignedLeads() {
     const open = leads.filter(
       (row) => row.entity_type !== "student" && row.lead_status !== "converted",
     );
-    const unassigned = open.filter((row) => !row.assigned_telecaller_id);
+    const unassigned = open.filter((row) => !row.assigned_telecaller_id && !row.assigned_counselor_id);
     const unassignedIds = new Set(unassigned.map((row) => String(row.id)));
 
     // Somebody picked these up. Forget them so they alert again if they are ever dropped.
@@ -9033,11 +9045,11 @@ async function checkUnassignedLeads() {
       .join(", ");
     const extra = due.length > 3 ? ` and ${due.length - 3} more` : "";
     const message =
-      `${unassigned.length} lead${unassigned.length === 1 ? "" : "s"} have no telecaller. ` +
+      `${unassigned.length} lead${unassigned.length === 1 ? "" : "s"} have no telecaller or counselor. ` +
       `Waiting longest: ${waitedHours} hour${waitedHours === 1 ? "" : "s"}. New since the last check: ${names}${extra}.`;
 
     for (const admin of users.filter((row) => ADMIN_ROLES.includes(row.role))) {
-      await notify(admin.id, "Leads waiting for a telecaller", message, "warning", "/admin/leads");
+      await notify(admin.id, "Leads waiting for assignment", message, "warning", "/admin/alerts");
     }
     console.log(`[alerts] ${due.length} unassigned lead(s) reported to admins`);
   } catch (error) {

@@ -68,6 +68,36 @@ export function isConvertedStudent(lead: { entity_type?: string; lead_status?: s
   return lead.entity_type === "student" || lead.lead_status === "converted";
 }
 
+/** Open lead with a telecaller or counselor — either owner satisfies first contact. */
+export function openLeadHasOwner(lead: {
+  assigned_telecaller_id?: string | null;
+  assigned_counselor_id?: string | null;
+}) {
+  return Boolean(lead.assigned_telecaller_id || lead.assigned_counselor_id);
+}
+
+/** Open lead still waiting for a telecaller or counselor. */
+export function openLeadNeedsOwner(lead: {
+  entity_type?: string;
+  lead_status?: string;
+  assigned_telecaller_id?: string | null;
+  assigned_counselor_id?: string | null;
+}) {
+  if (isConvertedStudent(lead)) return false;
+  return !openLeadHasOwner(lead);
+}
+
+/** Whether this record should appear on assignment queues. */
+export function leadNeedsAssignment(lead: {
+  entity_type?: string;
+  lead_status?: string;
+  assigned_telecaller_id?: string | null;
+  assigned_counselor_id?: string | null;
+}) {
+  if (isConvertedStudent(lead)) return !lead.assigned_counselor_id;
+  return !openLeadHasOwner(lead);
+}
+
 const PORTAL_SOURCES = new Set(["student_site", "student_chat"]);
 
 export function isPortalSignup(lead: { lead_source?: string }) {

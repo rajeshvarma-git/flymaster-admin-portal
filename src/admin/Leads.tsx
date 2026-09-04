@@ -451,7 +451,7 @@ import { format } from "date-fns";
 import { Flame, Mail, Phone, PhoneCall } from "lucide-react";
 import { api } from "@/lib/api";
 import { refreshStore, useAdminStore } from "@/lib/store";
-import { displayName, telecallerLabel } from "@/lib/utils";
+import { counselorLabel, displayName, suggestCounselorForCountries, telecallerLabel } from "@/lib/utils";
 import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
 import { Card } from "@/components/ui/Card";
@@ -494,6 +494,7 @@ export default function Leads() {
           score: String(data.get("score") || ""),
           countries: String(data.get("countries") || ""),
           telecallerId: String(data.get("telecallerId") || "") || null,
+          counselorId: String(data.get("counselorId") || "") || null,
         },
       });
       e.currentTarget.reset();
@@ -517,6 +518,9 @@ export default function Leads() {
           lead_status: String(data.get("status")),
           lead_stage: String(data.get("status")),
           assigned_telecaller_id: String(data.get("telecallerId") || "") || null,
+          assigned_counselor_id: String(data.get("counselorId") || "") || null,
+          status:
+            String(data.get("telecallerId") || data.get("counselorId") || "") ? "assigned" : "new",
           next_follow_up_date: String(data.get("follow") || "") || null,
           last_contact_date: new Date().toISOString(),
           field_of_interest: String(data.get("field") || ""),
@@ -548,7 +552,7 @@ export default function Leads() {
       </div>
 
       <Card className="mb-4 border-sky-100 bg-sky-50/50 p-4 text-sm text-slate-700">
-        <strong>Workflow:</strong> Portal signups arrive as hot leads → you assign a telecaller → the telecaller calls, qualifies and converts → you assign a country counselor. Only the telecaller can convert.
+        <strong>Workflow:</strong> Portal signups arrive as hot leads → assign a telecaller or a counselor → telecaller qualifies and converts → assign a country counselor after conversion if needed. Only the telecaller can convert.
       </Card>
 
       <Card className="mb-4 p-5">
@@ -567,6 +571,18 @@ export default function Leads() {
               <option value="">Unassigned</option>
               {store.telecallers.map((item) => (
                 <option key={item.id} value={item.id}>{displayName(item.first_name, item.last_name, item.email)}</option>
+              ))}
+            </Select>
+          </div>
+          <div>
+            <Label>Assign counselor</Label>
+            <Select name="counselorId" defaultValue="">
+              <option value="">Unassigned</option>
+              {store.counselors.map((item) => (
+                <option key={item.id} value={item.id}>
+                  {displayName(item.first_name, item.last_name, item.email)}
+                  {item.specializations?.length ? ` · ${item.specializations.join(", ")}` : ""}
+                </option>
               ))}
             </Select>
           </div>
@@ -599,7 +615,8 @@ export default function Leads() {
                   {(lead.preferred_countries || []).join(", ") || "No country"} · {lead.field_of_interest || "No field"} · {lead.academic_score || "No score"}
                 </p>
                 <p className="mt-1 text-xs text-slate-500">
-                  Telecaller: {telecallerLabel(store.telecallers, lead.assigned_telecaller_id)} · source {lead.lead_source.replace(/_/g, " ")}
+                  Telecaller: {telecallerLabel(store.telecallers, lead.assigned_telecaller_id)} · Counselor:{" "}
+                  {counselorLabel(store.counselors, lead.assigned_counselor_id)} · source {lead.lead_source.replace(/_/g, " ")}
                 </p>
               </div>
               <div className="flex items-center gap-2">
@@ -624,6 +641,27 @@ export default function Leads() {
                     ))}
                   </Select>
                 </div>
+                <div>
+                  <Label>Counselor</Label>
+                  <Select name="counselorId" defaultValue={selected.assigned_counselor_id || ""}>
+                    <option value="">Unassigned</option>
+                    {store.counselors.map((item) => (
+                      <option key={item.id} value={item.id}>
+                        {displayName(item.first_name, item.last_name, item.email)}
+                        {item.specializations?.length ? ` · ${item.specializations.join(", ")}` : ""}
+                      </option>
+                    ))}
+                  </Select>
+                </div>
+                {suggestCounselorForCountries(store.counselors, selected.preferred_countries || []) && (
+                  <p className="sm:col-span-2 text-xs text-slate-500">
+                    Suggested counselor:{" "}
+                    {counselorLabel(
+                      store.counselors,
+                      suggestCounselorForCountries(store.counselors, selected.preferred_countries || [])?.id,
+                    )}
+                  </p>
+                )}
                 <div><Label>Field</Label><Input name="field" defaultValue={selected.field_of_interest || ""} /></div>
                 <div><Label>Score</Label><Input name="score" defaultValue={selected.academic_score || ""} /></div>
                 <div className="sm:col-span-2">
