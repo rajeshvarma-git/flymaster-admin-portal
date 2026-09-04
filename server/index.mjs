@@ -6629,6 +6629,59 @@ function emailsMatch(left, right) {
   return Boolean(leftKey && leftKey === rightKey && leftKey.length >= 4);
 }
 
+function coalesceLeadRow(a, b) {
+  if (!a) return { ...b };
+  if (!b) return { ...a };
+  return {
+    ...a,
+    ...b,
+    assigned_counselor_id: b.assigned_counselor_id || a.assigned_counselor_id || null,
+    assigned_telecaller_id: b.assigned_telecaller_id || a.assigned_telecaller_id || null,
+    preferred_countries: (Array.isArray(b.preferred_countries) && b.preferred_countries.length
+      ? b.preferred_countries
+      : a.preferred_countries) || [],
+    first_name: b.first_name || a.first_name || "",
+    last_name: b.last_name || a.last_name || "",
+    email: b.email || a.email || "",
+    phone: b.phone || a.phone || "",
+    notes: b.notes || a.notes || "",
+  };
+}
+
+/** Merge SQL + JSON lead rows and dedupe portal duplicates keyed by user_id or email. */
+function mergeLeadSources(sqlRows, jsonRows) {
+  const combined = [];
+  for (const row of [...sqlRows, ...jsonRows]) {
+    const idx = combined.findIndex(
+      (existing) =>
+        String(existing.id) === String(row.id)
+        || (row.user_id && existing.user_id && String(existing.user_id) === String(row.user_id))
+        || emailsMatch(existing.email, row.email),
+    );
+    if (idx < 0) combined.push({ ...row });
+    else combined[idx] = coalesceLeadRow(combined[idx], row);
+  }
+  return combined;
+}
+
+function findLeadJsonRecord(jsonLeads, id) {
+  const key = String(id);
+  return (
+    jsonLeads.find((row) => String(row.id) === key)
+    || jsonLeads.find((row) => String(row.user_id) === key)
+    || null
+  );
+}
+
+async function resolveCounselorId(rawId) {
+  if (!rawId) return null;
+  const counselors = await loadCounselors();
+  const id = String(rawId);
+  const found = counselors.find((row) => row.id === id || row.auth_user_id === id);
+  if (!found) return isUuid(id) ? id : null;
+  return [found.id, found.auth_user_id].find((value) => isUuid(value)) || found.id;
+}
+
 function mergeById(...lists) {
   const map = new Map();
   for (const list of lists) {
@@ -7436,6 +7489,10 @@ async function deactivateCounselor(counselorId) {
 }
 
 async function applyLeadPatch(id, patch) {
+  if (patch.assigned_counselor_id !== undefined) {
+    patch.assigned_counselor_id = await resolveCounselorId(patch.assigned_counselor_id);
+  }
+
   if (patch.lead_status === "converted" || patch.entity_type === "student") {
     patch.entity_type = "student";
     patch.lead_stage = "converted";
@@ -7452,14 +7509,16 @@ async function applyLeadPatch(id, patch) {
     if (keys.length) {
       const sets = keys.map((key, index) => `${key} = $${index + 2}`);
       const values = keys.map((key) => patch[key]);
-      await pool.query(`UPDATE student_leads SET ${sets.join(", ")} WHERE id = $1`, [id, ...values]).catch(() => {});
+      await pool.query(`UPDATE student_leads SET ${sets.join(", ")} WHERE id = $1 OR user_id = $1`, [id, ...values]).catch(() => {});
     }
   }
 
   const jsonLeads = await jsonTable("student_leads");
-  const shared = jsonLeads.find((row) => String(row.id) === String(id)) || { id };
-  await jsonUpsert("student_leads", { ...shared, ...patch, id: shared.id || id });
-  return { ...shared, ...patch, id: shared.id || id };
+  const shared = findLeadJsonRecord(jsonLeads, id) || { id };
+  const storeId = String(shared.id || id);
+  const merged = { ...shared, ...patch, id: storeId };
+  await jsonUpsert("student_leads", merged);
+  return merged;
 }
 
 async function loadState() {
@@ -7522,7 +7581,7 @@ async function loadState() {
     loadUsers(),
   ]);
 
-  const leads = mergeById(
+  const leads = mergeLeadSources(
     sqlLeads.rows.map(asLead),
     jsonLeads.map(asLead),
   ).map((lead) => {
@@ -8222,9 +8281,11 @@ app.post("/api/system/alerts/run", auth, async (_req, res) => {
   res.json({ ok: true, ...alertStatus });
 });
 
-app.get("/api/state", auth, async (_req, res) => {
+app.get("/api/state", auth, async (req, res) => {
   try {
-    res.json(await loadState());
+    const state = await loadState();
+    state.notifications = state.notifications.filter((row) => String(row.user_id) === String(req.user.id));
+    res.json(state);
   } catch (error) {
     res.status(500).json({ error: error.message || "Could not load admin data" });
   }
@@ -8234,7 +8295,7 @@ app.post("/api/leads", auth, async (req, res) => {
   const studentId = crypto.randomUUID();
   const countries = String(req.body.countries || "").split(",").map((item) => item.trim()).filter(Boolean);
   const telecallerId = req.body.telecallerId || null;
-  const counselorId = req.body.counselorId || null;
+  const counselorId = await resolveCounselorId(req.body.counselorId || null);
   const payload = {
     id: crypto.randomUUID(),
     user_id: studentId,
@@ -8295,9 +8356,18 @@ app.patch("/api/leads/:id", auth, async (req, res) => {
     "cooled_at", "cooled_reason",
     "first_name", "last_name", "email", "phone", "field_of_interest", "academic_score", "preferred_countries",
   ];
-  const entries = Object.entries(req.body).filter(([key]) => allowed.includes(key));
+  const body = { ...req.body };
+  if (body.counselorId !== undefined && body.assigned_counselor_id === undefined) {
+    body.assigned_counselor_id = body.counselorId;
+  }
+  const entries = Object.entries(body).filter(([key]) => allowed.includes(key));
   if (!entries.length) return res.json({ ok: true });
   const patch = Object.fromEntries(entries);
+  if (patch.assigned_counselor_id === "") patch.assigned_counselor_id = null;
+  if (patch.assigned_telecaller_id === "") patch.assigned_telecaller_id = null;
+  if ((patch.assigned_counselor_id || patch.assigned_telecaller_id) && !patch.status) {
+    patch.status = "assigned";
+  }
   // Same rule as the convert route: an admin cannot move a lead across the conversion
   // boundary by editing it, only a telecaller can.
   if (patch.lead_status === "converted" || patch.entity_type === "student") {
@@ -8306,7 +8376,7 @@ app.patch("/api/leads/:id", auth, async (req, res) => {
     });
   }
   const jsonLeads = await jsonTable("student_leads");
-  const current = jsonLeads.find((row) => String(row.id) === String(req.params.id));
+  const current = findLeadJsonRecord(jsonLeads, req.params.id);
   const updated = await applyLeadPatch(req.params.id, patch);
   await syncOwnershipOnAssignment(current, updated);
   if (patch.assigned_telecaller_id) {
@@ -8878,6 +8948,38 @@ function hoursBetween(a, b) {
   return Math.abs(new Date(a).getTime() - new Date(b).getTime()) / 3600000;
 }
 
+/** Skip duplicate reminders to the same person inside the repeat window. */
+async function notifyOnce(userId, title, message, type = "info", actionUrl = "", repeatHours = ALERT_REPEAT_HOURS) {
+  if (!userId) return;
+  const notes = await jsonTable("notifications");
+  const now = new Date().toISOString();
+  const duplicate = notes.some(
+    (row) =>
+      String(row.user_id) === String(userId) &&
+      row.title === title &&
+      row.created_at &&
+      hoursBetween(now, row.created_at) < repeatHours,
+  );
+  if (duplicate) return;
+  await notify(userId, title, message, type, actionUrl);
+}
+
+/** Skip duplicate reminders to the same person inside the repeat window. */
+async function notifyOnce(userId, title, message, type = "info", actionUrl = "", repeatHours = ALERT_REPEAT_HOURS) {
+  if (!userId) return;
+  const notes = await jsonTable("notifications");
+  const now = new Date().toISOString();
+  const duplicate = notes.some(
+    (row) =>
+      String(row.user_id) === String(userId) &&
+      row.title === title &&
+      row.created_at &&
+      hoursBetween(now, row.created_at) < repeatHours,
+  );
+  if (duplicate) return;
+  await notify(userId, title, message, type, actionUrl);
+}
+
 /**
  * Any lead that has a telecaller but has gone quiet past COLD_AFTER_DAYS becomes cold.
  * The clock starts at the last logged call, or at assignment if there has never been one.
@@ -9049,7 +9151,7 @@ async function checkUnassignedLeads() {
       `Waiting longest: ${waitedHours} hour${waitedHours === 1 ? "" : "s"}. New since the last check: ${names}${extra}.`;
 
     for (const admin of users.filter((row) => ADMIN_ROLES.includes(row.role))) {
-      await notify(admin.id, "Leads waiting for assignment", message, "warning", "/admin/alerts");
+      await notifyOnce(admin.id, "Leads waiting for assignment", message, "warning", "/admin/alerts");
     }
     console.log(`[alerts] ${due.length} unassigned lead(s) reported to admins`);
   } catch (error) {

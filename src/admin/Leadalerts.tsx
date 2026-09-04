@@ -1010,15 +1010,11 @@ import { AlarmClock, RefreshCw } from "lucide-react";
 import { api } from "@/lib/api";
 import { refreshStore, useAdminStore } from "@/lib/store";
 import {
-  counselorLabel,
   displayName,
   initials,
   isConvertedStudent,
   isPortalSignup,
   leadNeedsAssignment,
-  openLeadNeedsOwner,
-  suggestCounselorForCountries,
-  telecallerLabel,
 } from "@/lib/utils";
 import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
@@ -1074,21 +1070,17 @@ function clockTime(value: string | null) {
 export default function LeadAlerts() {
   const store = useAdminStore();
   const [status, setStatus] = useState<AlertStatus | null>(null);
+  const [assignMode, setAssignMode] = useState<"telecaller" | "counselor">("telecaller");
   const [telecallerId, setTelecallerId] = useState("");
   const [counselorId, setCounselorId] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [, forceTick] = useState(0);
 
-  /**
-   * "Request failed" is what the API client returns for a 404 with no body, which here
-   * almost always means the running server predates the watcher endpoints. Say that
-   * plainly instead of making someone guess.
-   */
   const describe = (err: unknown) => {
     const raw = err instanceof Error ? err.message : "";
     if (!raw || raw === "Request failed") {
-      return "The API did not recognise /api/system/alerts. The server running on port 8788 is older than this page — restart it, or update server/index.mjs.";
+      return "The API did not recognise /api/system/alerts. Restart the server on port 8788 and try again.";
     }
     return raw;
   };
@@ -1105,7 +1097,6 @@ export default function LeadAlerts() {
 
   useEffect(() => {
     void loadStatus();
-    // Keep the countdown honest without hammering the API.
     const tick = window.setInterval(() => forceTick((n) => n + 1), 30000);
     const poll = window.setInterval(() => void loadStatus(), 60000);
     return () => {
@@ -1122,20 +1113,25 @@ export default function LeadAlerts() {
     [store.leads],
   );
 
-  const needingOwner = waiting.filter((lead) => openLeadNeedsOwner(lead));
-  const needingCounselor = waiting.filter((lead) => isConvertedStudent(lead) && !lead.assigned_counselor_id);
+  const oldestHours = waiting.length
+    ? Math.max(...waiting.map((lead) => hoursSince(lead.created_at) ?? 0))
+    : 0;
 
-  const counselorLoad = (id: string) =>
-    store.leads.filter((lead) => lead.assigned_counselor_id === id).length;
+  const recentReminders = useMemo(() => {
+    const seen = new Set<string>();
+    return store.notifications
+      .filter((row) => (row.title || "").toLowerCase().includes("waiting"))
+      .sort((a, b) => String(b.created_at || "").localeCompare(String(a.created_at || "")))
+      .filter((row) => {
+        const key = `${row.title}|${row.created_at?.slice(0, 16) || ""}`;
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      })
+      .slice(0, 5);
+  }, [store.notifications]);
 
-  const escalated = needingOwner.filter((lead) => (hoursSince(lead.created_at) ?? 0) >= ESCALATE_HOURS);
-  const alertFeed = store.notifications
-    .filter((row) => {
-      const title = (row.title || "").toLowerCase();
-      return title.includes("telecaller") || title.includes("waiting for assignment");
-    })
-    .sort((a, b) => String(b.created_at || "").localeCompare(String(a.created_at || "")))
-    .slice(0, 25);
+  const selectedAssignee = assignMode === "telecaller" ? telecallerId : counselorId;
 
   const runNow = async () => {
     setBusy(true);
@@ -1150,29 +1146,32 @@ export default function LeadAlerts() {
     }
   };
 
-  const assignTelecaller = async (lead: Lead) => {
-    if (!telecallerId) return;
-    setBusy(true);
-    setError("");
-    try {
-      await api(`/leads/${lead.id}`, { method: "PATCH", body: { assigned_telecaller_id: telecallerId, status: "assigned" } });
-      await refreshStore();
-      await loadStatus();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Could not assign the telecaller.");
-    } finally {
-      setBusy(false);
+  const assignLead = async (lead: Lead) => {
+    if (assignMode === "telecaller") {
+      if (!telecallerId) return;
+      setBusy(true);
+      setError("");
+      try {
+        await api(`/leads/${lead.id}`, {
+          method: "PATCH",
+          body: { assigned_telecaller_id: telecallerId, status: "assigned" },
+        });
+        await refreshStore();
+        await loadStatus();
+      } catch (err) {
+        setError(err instanceof Error ? err.message : "Could not assign the telecaller.");
+      } finally {
+        setBusy(false);
+      }
+      return;
     }
-  };
-
-  const assignCounselor = async (lead: Lead, targetId = counselorId) => {
-    if (!targetId) return;
+    if (!counselorId) return;
     setBusy(true);
     setError("");
     try {
       await api(`/leads/${lead.id}`, {
         method: "PATCH",
-        body: { assigned_counselor_id: targetId, status: "assigned" },
+        body: { assigned_counselor_id: counselorId, status: "assigned" },
       });
       await refreshStore();
       await loadStatus();
@@ -1184,6 +1183,7 @@ export default function LeadAlerts() {
   };
 
   const interval = status?.intervalHours ?? 2;
+  const repeatHours = status?.repeatHours ?? 24;
 
   return (
     <div>
@@ -1192,290 +1192,141 @@ export default function LeadAlerts() {
         <div>
           <h1 className="text-2xl font-bold">Lead alerts</h1>
           <p className="text-slate-600">
-            Student portal signups and open leads appear here. Assign a telecaller for first contact or a counselor
-            for country support — either one clears the lead from this queue.
+            New portal signups land here. Pick a telecaller to call them, or a counselor to support them directly.
           </p>
         </div>
       </div>
 
-      <div className="rounded-2xl bg-navy-950 p-5 text-white shadow-card">
-        <div className="flex flex-wrap items-center justify-between gap-5">
-          <div>
-            <p className="flex items-center gap-2 text-[11px] font-bold uppercase tracking-wider text-slate-400">
-              <span
-                className={`h-2 w-2 rounded-full ${
-                  !status ? "bg-slate-500" : status.enabled ? "animate-pulse bg-emerald-500" : "bg-rose-500"
-                }`}
-              />
-              Watcher
-            </p>
-            <p className="mt-1 text-xl font-bold">
-              {!status ? "Unknown" : status.enabled ? "Running" : "Disabled"}
-            </p>
-          </div>
-          <div>
-            <p className="text-[11px] font-bold uppercase tracking-wider text-slate-400">Last check</p>
-            <p className="mt-1 text-xl font-bold tabular-nums">
-              {status ? clockTime(status.lastRunAt) : "—"}
-            </p>
-          </div>
-          <div>
-            <p className="text-[11px] font-bold uppercase tracking-wider text-slate-400">Next check in</p>
-            <p className="mt-1 text-xl font-bold tabular-nums">
-              {status ? countdown(status.nextRunAt) : "—"}
-            </p>
-          </div>
-          <div>
-            <p className="text-[11px] font-bold uppercase tracking-wider text-slate-400">Reported last run</p>
-            <p className="mt-1 text-xl font-bold tabular-nums">{status ? status.notifiedCount : "—"}</p>
-          </div>
-          <div>
-            <p className="text-[11px] font-bold uppercase tracking-wider text-slate-400">Cooled last run</p>
-            <p className="mt-1 text-xl font-bold tabular-nums">{status ? status.cooledCount : "—"}</p>
-          </div>
-          {status?.autoAssign && (
-            <div>
-              <p className="text-[11px] font-bold uppercase tracking-wider text-slate-400">Auto-assigned</p>
-              <p className="mt-1 text-xl font-bold tabular-nums">{status ? status.assignedCount : "—"}</p>
-            </div>
-          )}
-          <Button variant="secondary" size="sm" disabled={busy} onClick={() => void runNow()}>
-            <RefreshCw className={`h-4 w-4 ${busy ? "animate-spin" : ""}`} /> Run check now
-          </Button>
+      <Card className="mb-4 flex flex-wrap items-center justify-between gap-4 p-4">
+        <div>
+          <p className="text-2xl font-bold text-slate-900">{waiting.length}</p>
+          <p className="text-sm text-slate-500">
+            {waiting.length === 1 ? "lead waiting" : "leads waiting"}
+            {waiting.length > 0 && oldestHours >= 1 && (
+              <> · oldest {ageLabel(oldestHours)}</>
+            )}
+          </p>
         </div>
-      </div>
+        <div className="text-right text-sm text-slate-500">
+          <p>Auto-reminder every {interval}h · repeats at most every {repeatHours}h</p>
+          <p>Last check: {status ? clockTime(status.lastRunAt) : "—"} · Next: {status ? countdown(status.nextRunAt) : "—"}</p>
+        </div>
+        <Button variant="secondary" size="sm" disabled={busy} onClick={() => void runNow()}>
+          <RefreshCw className={`h-4 w-4 ${busy ? "animate-spin" : ""}`} /> Run check now
+        </Button>
+      </Card>
 
-      {status && !status.enabled && (
-        <Card className="mt-4 border-amber-200 bg-amber-50 p-4 text-sm text-amber-800">
-          The watcher is switched off. Set <code>UNASSIGNED_ALERT_HOURS</code> to a positive number and restart the
-          API to turn it back on.
-        </Card>
-      )}
+      {error && <Card className="mb-4 border-rose-200 bg-rose-50 p-4 text-sm text-rose-800">{error}</Card>}
       {status?.lastError && (
-        <Card className="mt-4 border-rose-200 bg-rose-50 p-4 text-sm text-rose-800">
+        <Card className="mb-4 border-rose-200 bg-rose-50 p-4 text-sm text-rose-800">
           Last check failed: {status.lastError}
         </Card>
       )}
-      {error && <Card className="mt-4 border-rose-200 bg-rose-50 p-4 text-sm text-rose-800">{error}</Card>}
-      {escalated.length > 0 && (
-        <Card className="mt-4 border-rose-200 bg-rose-50 p-4 text-sm text-rose-800">
-          <strong>
-            {escalated.length} lead{escalated.length === 1 ? "" : "s"} ha{escalated.length === 1 ? "s" : "ve"} been waiting over {ESCALATE_HOURS} hours without a telecaller or counselor.
-          </strong>{" "}
-          Assign a telecaller or counselor now.
-        </Card>
-      )}
-      {needingCounselor.length > 0 && (
-        <Card className="mt-4 border-amber-200 bg-amber-50 p-4 text-sm text-amber-800">
-          <strong>
-            {needingCounselor.length} converted student{needingCounselor.length === 1 ? "" : "s"} still need
-            {needingCounselor.length === 1 ? "s" : ""} a counselor.
-          </strong>{" "}
-          Pick a counselor below and assign.
+      {waiting.length > 0 && oldestHours >= ESCALATE_HOURS && (
+        <Card className="mb-4 border-rose-200 bg-rose-50 p-4 text-sm text-rose-800">
+          <strong>{waiting.length} lead{waiting.length === 1 ? "" : "s"} waiting over {ESCALATE_HOURS} hours.</strong>{" "}
+          Assign someone below.
         </Card>
       )}
 
-      <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-        {[
-          { label: "Need assignment", value: needingOwner.length, alert: needingOwner.length > 0 },
-          { label: "Need counselor", value: needingCounselor.length, alert: needingCounselor.length > 0 },
-          { label: `Escalated past ${ESCALATE_HOURS}h`, value: escalated.length, alert: escalated.length > 0 },
-          { label: "Alerts in the log", value: alertFeed.length },
-        ].map((stat) => (
-          <Card key={stat.label} className="p-4">
-            <div className={`h-4 w-4 rounded-md ${stat.alert ? "bg-rose-100" : "bg-sky-100"}`} />
-            <p className={`mt-2 text-2xl font-bold ${stat.alert ? "text-rose-600" : ""}`}>{stat.value}</p>
-            <p className="text-sm text-slate-500">{stat.label}</p>
-          </Card>
-        ))}
-      </div>
-
-      <div className="mt-4 grid gap-4 xl:grid-cols-[1.4fr_1fr]">
-        <div>
-          <Card className="p-4">
-            <p className="mb-3 text-sm font-medium text-slate-700">Assign to</p>
-            <div className="grid gap-3 sm:grid-cols-2">
-              <div>
-                <p className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-slate-500">Telecaller</p>
-                <Select value={telecallerId} onChange={(e) => setTelecallerId(e.target.value)}>
-                  <option value="">Choose telecaller</option>
-                  {store.telecallers.map((row) => {
-                    const load = store.leads.filter(
-                      (lead) => !isConvertedStudent(lead) && lead.assigned_telecaller_id === row.id,
-                    ).length;
-                    return (
-                      <option key={row.id} value={row.id}>
-                        {displayName(row.first_name, row.last_name, row.email)} · {load} open
-                      </option>
-                    );
-                  })}
-                </Select>
-              </div>
-              <div>
-                <p className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-slate-500">Counselor</p>
-                <Select value={counselorId} onChange={(e) => setCounselorId(e.target.value)}>
-                  <option value="">Choose counselor</option>
-                  {store.counselors.map((row) => (
-                    <option key={row.id} value={row.id}>
-                      {displayName(row.first_name, row.last_name, row.email)}
-                      {row.specializations?.length ? ` · ${row.specializations.join(", ")}` : ""}
-                      {` · ${counselorLoad(row.id)} students`}
-                    </option>
-                  ))}
-                </Select>
-              </div>
-            </div>
-          </Card>
-
-          <Card className="mt-3 overflow-hidden">
-            <p className="border-b border-slate-200 px-4 py-3 font-bold">Waiting for assignment</p>
-            {waiting.map((lead) => {
-              const hours = hoursSince(lead.created_at);
-              const late = (hours ?? 0) >= ESCALATE_HOURS;
-              const converted = isConvertedStudent(lead);
-              const needsOwner = openLeadNeedsOwner(lead);
-              const needsCounselor = converted && !lead.assigned_counselor_id;
-              const suggested = suggestCounselorForCountries(store.counselors, lead.preferred_countries || []);
-              const sourceLabel = isPortalSignup(lead) || lead.user_id
-                ? "Student portal"
-                : (lead.lead_source || "manual").replace(/_/g, " ");
-              return (
-                <div
-                  key={lead.id}
-                  className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 px-4 py-3 last:border-b-0"
-                >
-                  <div className="flex min-w-0 items-center gap-3">
-                    <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-navy-900 text-xs font-bold text-white">
-                      {initials(lead.first_name, lead.last_name, lead.email)}
-                    </span>
-                    <div className="min-w-0">
-                      <p className="font-semibold">
-                        {displayName(lead.first_name, lead.last_name, lead.email)}
-                      </p>
-                      <p className="text-xs text-slate-500">
-                        {(lead.preferred_countries || []).join(", ") || "No country"} · {sourceLabel}
-                      </p>
-                      <p className="mt-0.5 text-xs text-slate-400">
-                        Telecaller:{" "}
-                        {lead.assigned_telecaller_id
-                          ? telecallerLabel(store.telecallers, lead.assigned_telecaller_id)
-                          : "Not assigned"}
-                        {" · "}
-                        Counselor:{" "}
-                        {lead.assigned_counselor_id
-                          ? counselorLabel(store.counselors, lead.assigned_counselor_id)
-                          : "Not assigned"}
-                        {!converted && (
-                          <>
-                            {" · "}
-                            Waiting {ageLabel(hours)}
-                            {late && needsOwner ? " · escalated" : ""}
-                          </>
-                        )}
-                      </p>
-                    </div>
-                  </div>
-                  <div className="flex flex-wrap items-center gap-2">
-                    <Badge value={converted ? "converted" : lead.lead_status || "hot"} />
-                    {needsOwner && (
-                      <Button size="sm" disabled={busy || !telecallerId} onClick={() => void assignTelecaller(lead)}>
-                        Assign telecaller
-                      </Button>
-                    )}
-                    {needsOwner && suggested && (
-                      <Button
-                        size="sm"
-                        variant="secondary"
-                        disabled={busy}
-                        onClick={() => void assignCounselor(lead, suggested.id)}
-                      >
-                        Assign counselor match
-                      </Button>
-                    )}
-                    {needsOwner && (
-                      <Button size="sm" variant="secondary" disabled={busy || !counselorId} onClick={() => void assignCounselor(lead)}>
-                        Assign counselor
-                      </Button>
-                    )}
-                    {needsCounselor && suggested && (
-                      <Button
-                        size="sm"
-                        variant="secondary"
-                        disabled={busy}
-                        onClick={() => void assignCounselor(lead, suggested.id)}
-                      >
-                        Assign counselor match
-                      </Button>
-                    )}
-                    {needsCounselor && (
-                      <Button size="sm" variant="secondary" disabled={busy || !counselorId} onClick={() => void assignCounselor(lead)}>
-                        Assign counselor
-                      </Button>
-                    )}
-                  </div>
-                </div>
-              );
-            })}
-            {waiting.length === 0 && (
-              <p className="p-8 text-center text-sm text-slate-500">
-                Every lead has an owner assigned. Nothing to alert.
-              </p>
-            )}
-          </Card>
-
-          <Card className="mt-3 p-5">
-            <p className="font-bold">How the check works</p>
-            <p className="mt-1 text-sm text-slate-500">
-              The point is not the timer, it is not spamming. Admins stop reading an alert that repeats.
-            </p>
-            <div className="mt-3 space-y-3 text-sm">
-              {[
-                ["bg-slate-300", "Grace period", "A brand new signup is left alone for a few minutes before anything is sent."],
-                ["bg-sky-500", "Admin assigns telecaller or counselor", "When a student signs up on the portal, they appear here. Pick a telecaller for first contact or a counselor for country support — either one removes them from this queue."],
-                ["bg-amber-400", `First alert after ${interval}h`, "One digest to every admin naming who is waiting and for how long — not one message per lead."],
-                ["bg-rose-500", `Repeat at most every ${status?.repeatHours ?? 24}h`, "The same lead is never reported twice inside that window, however many checks run."],
-                ["bg-emerald-500", "Assigned — alerts stop", "Once a telecaller or counselor is assigned, the lead's alert record is deleted. It will alert again only if both are cleared."],
-                ["bg-slate-400", `Goes cold after ${status?.coldAfterDays ?? 2} days`, "Separately, any lead whose telecaller has logged no call in that time is set to cold and the telecaller is told."],
-              ].map(([dot, title, body]) => (
-                <div key={title} className="flex gap-3 border-t border-slate-100 pt-3 first:border-t-0 first:pt-0">
-                  <span className={`mt-1.5 h-2.5 w-2.5 shrink-0 rounded-full ${dot}`} />
-                  <div>
-                    <p className="font-semibold">{title}</p>
-                    <p className="text-slate-500">{body}</p>
-                  </div>
-                </div>
-              ))}
-            </div>
-          </Card>
+      <Card className="mb-4 p-4">
+        <p className="mb-3 text-sm font-medium text-slate-700">Step 1 — choose who to assign</p>
+        <div className="flex flex-wrap gap-2">
+          {(["telecaller", "counselor"] as const).map((mode) => (
+            <button
+              key={mode}
+              type="button"
+              onClick={() => setAssignMode(mode)}
+              className={`rounded-lg px-4 py-2 text-sm font-medium capitalize ${
+                assignMode === mode ? "bg-navy-900 text-white" : "bg-slate-100 text-slate-600 hover:bg-slate-200"
+              }`}
+            >
+              {mode}
+            </button>
+          ))}
         </div>
+        <div className="mt-3">
+          {assignMode === "telecaller" ? (
+            <Select value={telecallerId} onChange={(e) => setTelecallerId(e.target.value)}>
+              <option value="">Choose telecaller</option>
+              {store.telecallers.map((row) => (
+                <option key={row.id} value={row.id}>
+                  {displayName(row.first_name, row.last_name, row.email)}
+                </option>
+              ))}
+            </Select>
+          ) : (
+            <Select value={counselorId} onChange={(e) => setCounselorId(e.target.value)}>
+              <option value="">Choose counselor</option>
+              {store.counselors.map((row) => (
+                <option key={row.id} value={row.id}>
+                  {displayName(row.first_name, row.last_name, row.email)}
+                  {row.specializations?.length ? ` · ${row.specializations.join(", ")}` : ""}
+                </option>
+              ))}
+            </Select>
+          )}
+        </div>
+      </Card>
 
-        <Card className="overflow-hidden">
-          <p className="border-b border-slate-200 px-4 py-3 font-bold">Alerts sent to admins</p>
-          <div className="max-h-[70vh] overflow-y-auto">
-            {alertFeed.map((row) => (
-              <div key={row.id} className="border-b border-slate-100 px-4 py-3 last:border-b-0">
-                <p className="text-sm font-semibold">{row.title}</p>
-                <p className="mt-0.5 text-sm text-slate-600">{row.message}</p>
-                {row.created_at && (
-                  <p className="mt-1 text-[11px] tabular-nums text-slate-400">
-                    {new Date(row.created_at).toLocaleString(undefined, {
-                      month: "short",
-                      day: "numeric",
-                      hour: "2-digit",
-                      minute: "2-digit",
-                    })}
+      <Card className="overflow-hidden">
+        <p className="border-b border-slate-200 px-4 py-3 font-bold">Step 2 — assign waiting leads</p>
+        {waiting.map((lead) => {
+          const hours = hoursSince(lead.created_at);
+          const sourceLabel = isPortalSignup(lead) || lead.user_id
+            ? "Student portal"
+            : (lead.lead_source || "manual").replace(/_/g, " ");
+          return (
+            <div
+              key={lead.id}
+              className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 px-4 py-3 last:border-b-0"
+            >
+              <div className="flex min-w-0 items-center gap-3">
+                <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-navy-900 text-xs font-bold text-white">
+                  {initials(lead.first_name, lead.last_name, lead.email)}
+                </span>
+                <div className="min-w-0">
+                  <p className="font-semibold">{displayName(lead.first_name, lead.last_name, lead.email)}</p>
+                  <p className="text-xs text-slate-500">
+                    {(lead.preferred_countries || []).join(", ") || "No country"} · {sourceLabel} · waiting {ageLabel(hours)}
                   </p>
-                )}
+                </div>
               </div>
-            ))}
-            {alertFeed.length === 0 && (
-              <p className="p-8 text-center text-sm text-slate-500">
-                No alerts sent yet. Press Run check now to test it.
-              </p>
-            )}
-          </div>
+              <div className="flex items-center gap-2">
+                <Badge value={isConvertedStudent(lead) ? "converted" : lead.lead_status || "hot"} />
+                <Button size="sm" disabled={busy || !selectedAssignee} onClick={() => void assignLead(lead)}>
+                  Assign {assignMode}
+                </Button>
+              </div>
+            </div>
+          );
+        })}
+        {waiting.length === 0 && (
+          <p className="p-8 text-center text-sm text-slate-500">All caught up — every lead has a telecaller or counselor.</p>
+        )}
+      </Card>
+
+      {recentReminders.length > 0 && (
+        <Card className="mt-4 overflow-hidden">
+          <p className="border-b border-slate-200 px-4 py-3 text-sm font-bold text-slate-700">Your recent reminders</p>
+          {recentReminders.map((row) => (
+            <div key={row.id} className="border-b border-slate-100 px-4 py-3 last:border-b-0">
+              <p className="text-sm font-medium">{row.title}</p>
+              <p className="mt-0.5 text-sm text-slate-600">{row.message}</p>
+              {row.created_at && (
+                <p className="mt-1 text-[11px] text-slate-400">
+                  {new Date(row.created_at).toLocaleString(undefined, {
+                    month: "short",
+                    day: "numeric",
+                    hour: "2-digit",
+                    minute: "2-digit",
+                  })}
+                </p>
+              )}
+            </div>
+          ))}
         </Card>
-      </div>
+      )}
     </div>
   );
 }

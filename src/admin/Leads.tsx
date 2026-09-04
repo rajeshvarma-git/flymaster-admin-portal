@@ -465,6 +465,7 @@ export default function Leads() {
   const [status, setStatus] = useState("all");
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
 
   const leads = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -473,7 +474,8 @@ export default function Leads() {
       .filter((lead) => status === "all" || lead.lead_status === status)
       .filter((lead) =>
         `${lead.first_name} ${lead.last_name} ${lead.email} ${lead.phone} ${lead.field_of_interest}`.toLowerCase().includes(q),
-      );
+      )
+      .sort((a, b) => String(b.created_at || "").localeCompare(String(a.created_at || "")));
   }, [store.leads, query, status]);
 
   const selected = store.leads.find((lead) => lead.id === selectedId) || null;
@@ -482,6 +484,7 @@ export default function Leads() {
     e.preventDefault();
     const data = new FormData(e.currentTarget);
     setBusy(true);
+    setError("");
     try {
       await api("/leads", {
         method: "POST",
@@ -499,6 +502,8 @@ export default function Leads() {
       });
       e.currentTarget.reset();
       await refreshStore();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not add the lead.");
     } finally {
       setBusy(false);
     }
@@ -511,6 +516,7 @@ export default function Leads() {
     const data = new FormData(form);
     const notes = String(data.get("notes") || "");
     setBusy(true);
+    setError("");
     try {
       await api(`/leads/${selected.id}`, {
         method: "PATCH",
@@ -534,6 +540,8 @@ export default function Leads() {
       });
       setSelectedId(null);
       await refreshStore();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not save the lead.");
     } finally {
       setBusy(false);
     }
@@ -554,6 +562,12 @@ export default function Leads() {
       <Card className="mb-4 border-sky-100 bg-sky-50/50 p-4 text-sm text-slate-700">
         <strong>Workflow:</strong> Portal signups arrive as hot leads → assign a telecaller or a counselor → telecaller qualifies and converts → assign a country counselor after conversion if needed. Only the telecaller can convert.
       </Card>
+
+      {(error || store.error) && (
+        <Card className="mb-4 border-rose-200 bg-rose-50 p-4 text-sm text-rose-800">
+          {error || store.error}
+        </Card>
+      )}
 
       <Card className="mb-4 p-5">
         <p className="font-semibold">Add a lead</p>
