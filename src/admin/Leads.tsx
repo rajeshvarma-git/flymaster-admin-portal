@@ -451,7 +451,7 @@ import { format } from "date-fns";
 import { Flame, Mail, Phone, PhoneCall } from "lucide-react";
 import { api } from "@/lib/api";
 import { refreshStore, useAdminStore } from "@/lib/store";
-import { counselorLabel, displayName, suggestCounselorForCountries, telecallerLabel } from "@/lib/utils";
+import { counselorLabel, displayName, formatWhen, suggestCounselorForCountries, telecallerLabel } from "@/lib/utils";
 import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
 import { Card } from "@/components/ui/Card";
@@ -625,8 +625,17 @@ export default function Leads() {
                   {(lead.preferred_countries || []).join(", ") || "No country"} · {lead.field_of_interest || "No field"} · {lead.academic_score || "No score"}
                 </p>
                 <p className="mt-1 text-xs text-slate-500">
-                  Telecaller: {telecallerLabel(store.telecallers, lead.assigned_telecaller_id)} · Counselor:{" "}
-                  {counselorLabel(store.counselors, lead.assigned_counselor_id)} · source {lead.lead_source.replace(/_/g, " ")}
+                  Telecaller: {telecallerLabel(store.telecallers, lead.assigned_telecaller_id)}
+                  {lead.assigned_telecaller_id && lead.assigned_telecaller_at && (
+                    <> · assigned {formatWhen(lead.assigned_telecaller_at)}</>
+                  )}
+                  {" · "}
+                  Counselor: {counselorLabel(store.counselors, lead.assigned_counselor_id)}
+                  {lead.assigned_counselor_id && lead.assigned_counselor_at && (
+                    <> · assigned {formatWhen(lead.assigned_counselor_at)}</>
+                  )}
+                  {" · "}
+                  source {lead.lead_source.replace(/_/g, " ")}
                 </p>
               </div>
               <div className="flex items-center gap-2">
@@ -687,6 +696,17 @@ export default function Leads() {
                   <Textarea name="notes" placeholder="Telecaller notes from the call..." />
                 </div>
                 {selected.notes && <p className="sm:col-span-2 whitespace-pre-wrap text-xs text-slate-500">{selected.notes}</p>}
+                {(selected.assigned_telecaller_at || selected.assigned_counselor_at) && (
+                  <p className="sm:col-span-2 text-xs text-slate-500">
+                    {selected.assigned_telecaller_id && selected.assigned_telecaller_at && (
+                      <>Telecaller assigned {formatWhen(selected.assigned_telecaller_at)}</>
+                    )}
+                    {selected.assigned_telecaller_id && selected.assigned_telecaller_at && selected.assigned_counselor_id && selected.assigned_counselor_at && " · "}
+                    {selected.assigned_counselor_id && selected.assigned_counselor_at && (
+                      <>Counselor assigned {formatWhen(selected.assigned_counselor_at)}</>
+                    )}
+                  </p>
+                )}
                 <div className="flex flex-wrap gap-2">
                   <Button type="submit" disabled={busy}>Save</Button>
                   <Button type="button" variant="ghost" onClick={() => setSelectedId(null)}>Cancel</Button>

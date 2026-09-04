@@ -30,6 +30,8 @@ CREATE TABLE IF NOT EXISTS student_leads (
   status TEXT NOT NULL DEFAULT 'assigned',
   assigned_counselor_id UUID,
   assigned_telecaller_id UUID,
+  assigned_counselor_at TIMESTAMPTZ,
+  assigned_telecaller_at TIMESTAMPTZ,
   notes TEXT,
   next_follow_up_date TIMESTAMPTZ,
   last_contact_date TIMESTAMPTZ,

@@ -6637,6 +6637,12 @@ function coalesceLeadRow(a, b) {
     ...b,
     assigned_counselor_id: b.assigned_counselor_id || a.assigned_counselor_id || null,
     assigned_telecaller_id: b.assigned_telecaller_id || a.assigned_telecaller_id || null,
+    assigned_counselor_at: (b.assigned_counselor_id ? b.assigned_counselor_at : null)
+      || (a.assigned_counselor_id ? a.assigned_counselor_at : null)
+      || null,
+    assigned_telecaller_at: (b.assigned_telecaller_id ? b.assigned_telecaller_at : null)
+      || (a.assigned_telecaller_id ? a.assigned_telecaller_at : null)
+      || null,
     preferred_countries: (Array.isArray(b.preferred_countries) && b.preferred_countries.length
       ? b.preferred_countries
       : a.preferred_countries) || [],
@@ -6976,6 +6982,12 @@ function asLead(row) {
     preferred_countries: Array.isArray(row.preferred_countries) ? row.preferred_countries : [],
     assigned_counselor_id: row.assigned_counselor_id == null ? null : String(row.assigned_counselor_id),
     assigned_telecaller_id: row.assigned_telecaller_id == null ? null : String(row.assigned_telecaller_id),
+    assigned_counselor_at: row.assigned_counselor_at
+      || (row.assigned_counselor_id && row.updated_at ? row.updated_at : null)
+      || null,
+    assigned_telecaller_at: row.assigned_telecaller_at
+      || (row.assigned_telecaller_id && row.updated_at ? row.updated_at : null)
+      || null,
     entity_type: converted ? "student" : (row.entity_type || "lead"),
     lead_status: row.lead_status || (converted ? "converted" : openStatus),
     lead_stage: row.lead_stage || row.lead_status || (converted ? "converted" : openStatus),
@@ -7039,6 +7051,8 @@ async function applySchema() {
   }
   await pool.query("CREATE UNIQUE INDEX IF NOT EXISTS counselor_attendance_one_per_day ON counselor_attendance (counselor_id, date)").catch(() => {});
   await pool.query("CREATE UNIQUE INDEX IF NOT EXISTS counselor_salary_one_per_month ON counselor_salary_records (counselor_id, month, year)").catch(() => {});
+  await pool.query("ALTER TABLE student_leads ADD COLUMN IF NOT EXISTS assigned_telecaller_at TIMESTAMPTZ").catch(() => {});
+  await pool.query("ALTER TABLE student_leads ADD COLUMN IF NOT EXISTS assigned_counselor_at TIMESTAMPTZ").catch(() => {});
 }
 
 async function ensureAdminUser() {
@@ -7493,6 +7507,25 @@ async function applyLeadPatch(id, patch) {
     patch.assigned_counselor_id = await resolveCounselorId(patch.assigned_counselor_id);
   }
 
+  const jsonLeads = await jsonTable("student_leads");
+  const shared = findLeadJsonRecord(jsonLeads, id) || { id };
+  const now = new Date().toISOString();
+
+  if (patch.assigned_telecaller_id !== undefined) {
+    const next = patch.assigned_telecaller_id || null;
+    const prev = shared.assigned_telecaller_id || null;
+    if (String(next || "") !== String(prev || "")) {
+      patch.assigned_telecaller_at = next ? now : null;
+    }
+  }
+  if (patch.assigned_counselor_id !== undefined) {
+    const next = patch.assigned_counselor_id || null;
+    const prev = shared.assigned_counselor_id || null;
+    if (String(next || "") !== String(prev || "")) {
+      patch.assigned_counselor_at = next ? now : null;
+    }
+  }
+
   if (patch.lead_status === "converted" || patch.entity_type === "student") {
     patch.entity_type = "student";
     patch.lead_stage = "converted";
@@ -7500,6 +7533,7 @@ async function applyLeadPatch(id, patch) {
     patch.conversion_date = patch.conversion_date || new Date().toISOString();
     if (!patch.assigned_counselor_id) {
       patch.assigned_counselor_id = null;
+      patch.assigned_counselor_at = null;
       patch.status = "unassigned";
     }
   }
@@ -7513,10 +7547,8 @@ async function applyLeadPatch(id, patch) {
     }
   }
 
-  const jsonLeads = await jsonTable("student_leads");
-  const shared = findLeadJsonRecord(jsonLeads, id) || { id };
   const storeId = String(shared.id || id);
-  const merged = { ...shared, ...patch, id: storeId };
+  const merged = { ...shared, ...patch, id: storeId, updated_at: now };
   await jsonUpsert("student_leads", merged);
   return merged;
 }
@@ -8296,6 +8328,7 @@ app.post("/api/leads", auth, async (req, res) => {
   const countries = String(req.body.countries || "").split(",").map((item) => item.trim()).filter(Boolean);
   const telecallerId = req.body.telecallerId || null;
   const counselorId = await resolveCounselorId(req.body.counselorId || null);
+  const assignedAt = new Date().toISOString();
   const payload = {
     id: crypto.randomUUID(),
     user_id: studentId,
@@ -8312,10 +8345,13 @@ app.post("/api/leads", auth, async (req, res) => {
     priority: req.body.priority || "medium",
     assigned_telecaller_id: telecallerId,
     assigned_counselor_id: counselorId,
+    assigned_telecaller_at: telecallerId ? assignedAt : null,
+    assigned_counselor_at: counselorId ? assignedAt : null,
     entity_type: "lead",
     status: telecallerId || counselorId ? "assigned" : "new",
     notes: req.body.notes || "",
-    created_at: new Date().toISOString(),
+    created_at: assignedAt,
+    updated_at: assignedAt,
   };
   if (isUuid(payload.id) && isUuid(studentId)) {
     await pool.query(

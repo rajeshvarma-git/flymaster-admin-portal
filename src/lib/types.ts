@@ -57,6 +57,8 @@ export interface Lead {
   preferred_countries: string[];
   assigned_counselor_id: string | null;
   assigned_telecaller_id: string | null;
+  assigned_counselor_at?: string | null;
+  assigned_telecaller_at?: string | null;
   entity_type: string;
   lead_status: string;
   lead_stage: string;
