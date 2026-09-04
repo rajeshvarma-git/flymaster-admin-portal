@@ -559,10 +559,6 @@ export default function Leads() {
         </div>
       </div>
 
-      <Card className="mb-4 border-sky-100 bg-sky-50/50 p-4 text-sm text-slate-700">
-        <strong>Workflow:</strong> Portal signups arrive as hot leads → assign a telecaller or a counselor → telecaller qualifies and converts → assign a country counselor after conversion if needed. Only the telecaller can convert.
-      </Card>
-
       {(error || store.error) && (
         <Card className="mb-4 border-rose-200 bg-rose-50 p-4 text-sm text-rose-800">
           {error || store.error}

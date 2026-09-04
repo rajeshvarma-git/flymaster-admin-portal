@@ -270,10 +270,6 @@ export default function Dashboard() {
         <p className="text-slate-600">Telecaller → convert → country counselor → documents & applications.</p>
       </div>
 
-      <Card className="mt-4 border-sky-100 bg-sky-50/50 p-4 text-sm text-slate-700">
-        <strong>Flymaster flow:</strong> student portal signup creates a hot lead → assign a telecaller or counselor → telecaller qualifies and converts → assign a country counselor after conversion if needed.
-      </Card>
-
       {stranded.length > 0 && (
         <Card className="mt-4 border-rose-200 bg-rose-50 p-4 text-sm text-rose-800">
           <strong>{stranded.length} lead{stranded.length === 1 ? "" : "s"} waiting for assignment.</strong>{" "}
