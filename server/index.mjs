@@ -8964,22 +8964,6 @@ async function notifyOnce(userId, title, message, type = "info", actionUrl = "",
   await notify(userId, title, message, type, actionUrl);
 }
 
-/** Skip duplicate reminders to the same person inside the repeat window. */
-async function notifyOnce(userId, title, message, type = "info", actionUrl = "", repeatHours = ALERT_REPEAT_HOURS) {
-  if (!userId) return;
-  const notes = await jsonTable("notifications");
-  const now = new Date().toISOString();
-  const duplicate = notes.some(
-    (row) =>
-      String(row.user_id) === String(userId) &&
-      row.title === title &&
-      row.created_at &&
-      hoursBetween(now, row.created_at) < repeatHours,
-  );
-  if (duplicate) return;
-  await notify(userId, title, message, type, actionUrl);
-}
-
 /**
  * Any lead that has a telecaller but has gone quiet past COLD_AFTER_DAYS becomes cold.
  * The clock starts at the last logged call, or at assignment if there has never been one.
