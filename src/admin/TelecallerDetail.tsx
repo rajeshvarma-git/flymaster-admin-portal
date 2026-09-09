@@ -1,11 +1,14 @@
 import { useMemo, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { format } from "date-fns";
-import { ArrowLeft, CheckCircle2, MessageCircle, MessageSquare, PhoneCall } from "lucide-react";
-import { useAdminStore } from "@/lib/store";
+import { ArrowLeft, ArrowRightLeft, CheckCircle2, MessageCircle, MessageSquare, PhoneCall } from "lucide-react";
+import { api } from "@/lib/api";
+import { refreshStore, useAdminStore } from "@/lib/store";
 import { counselorLabel, displayName, initials, isConvertedStudent, studentOwns } from "@/lib/utils";
 import { Badge } from "@/components/ui/Badge";
+import { Button } from "@/components/ui/Button";
 import { Card } from "@/components/ui/Card";
+import { Select } from "@/components/ui/Field";
 import type { Lead } from "@/lib/types";
 
 const STALE_DAYS = 2;
@@ -13,8 +16,9 @@ type Tab = "open" | "converted" | "calls" | "chats";
 type LeadDetailTab = "overview" | "telecaller";
 
 function leadDetailUrl(leadId: string, detailTab: LeadDetailTab, telecallerId: string) {
-  const params = new URLSearchParams({ tab: detailTab, from: `telecaller/${telecallerId}` });
-  return `/admin/students/${leadId}?${params.toString()}`;
+  const params = new URLSearchParams({ from: `telecaller/${telecallerId}` });
+  if (detailTab === "telecaller") params.set("tab", "telecaller");
+  return `/admin/leads/${leadId}?${params.toString()}`;
 }
 
 function daysSince(value?: string | null) {
@@ -83,6 +87,9 @@ export default function TelecallerDetail() {
   const { id = "" } = useParams();
   const store = useAdminStore();
   const [tab, setTab] = useState<Tab>("open");
+  const [transferTargetId, setTransferTargetId] = useState("");
+  const [busyAction, setBusyAction] = useState<"transfer" | null>(null);
+  const [error, setError] = useState("");
 
   const telecaller = store.telecallers.find((row) => row.id === id) || null;
 
@@ -125,6 +132,34 @@ export default function TelecallerDetail() {
   }, [telecaller, store.telecallerConversations, store.telecallerMessages, store.leads]);
 
   const chatCount = chatThreads.reduce((sum, row) => sum + row.msgs.length, 0);
+
+  const otherTelecallers = store.telecallers.filter(
+    (row) => row.is_active !== false && row.id !== telecaller?.id,
+  );
+
+  const transferLeads = async () => {
+    if (!telecaller || !transferTargetId) {
+      setError("Choose a telecaller to transfer leads to.");
+      return;
+    }
+    setBusyAction("transfer");
+    setError("");
+    try {
+      const result = await api<{ count: number }>(`/telecallers/${telecaller.id}/transfer`, {
+        method: "POST",
+        body: { targetTelecallerId: transferTargetId },
+      });
+      setTransferTargetId("");
+      await refreshStore();
+      if (result.count === 0) {
+        setError("No leads were assigned to this telecaller.");
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not transfer leads.");
+    } finally {
+      setBusyAction(null);
+    }
+  };
 
   if (!telecaller) {
     return (
@@ -173,6 +208,50 @@ export default function TelecallerDetail() {
         </div>
       </Card>
 
+      <Card className="mt-4 p-5">
+        <div>
+          <p className="text-sm font-semibold text-slate-800">Transfer to another telecaller</p>
+          <p className="mt-1 max-w-xl text-xs text-slate-500">
+            Moves all open leads, converted students, call notes, and lead chats to another telecaller so history stays intact.
+          </p>
+        </div>
+        <div className="mt-4 flex flex-wrap items-end gap-2">
+          <div className="min-w-[260px]">
+            <p className="mb-1.5 text-sm font-medium text-slate-700">Transfer leads to</p>
+            <Select value={transferTargetId} onChange={(e) => setTransferTargetId(e.target.value)}>
+              <option value="">Choose telecaller</option>
+              {otherTelecallers.map((row) => {
+                const load = store.leads.filter((lead) => lead.assigned_telecaller_id === row.id).length;
+                return (
+                  <option key={row.id} value={row.id}>
+                    {displayName(row.first_name, row.last_name, row.email)}
+                    {` · ${load} lead${load === 1 ? "" : "s"}`}
+                  </option>
+                );
+              })}
+            </Select>
+          </div>
+          <Button
+            size="sm"
+            variant="secondary"
+            disabled={busyAction !== null || !transferTargetId || mine.length === 0}
+            onClick={() => void transferLeads()}
+          >
+            <ArrowRightLeft className="h-4 w-4" />
+            {busyAction === "transfer" ? "Transferring..." : "Transfer data"}
+          </Button>
+        </div>
+        {mine.length > 0 && (
+          <p className="mt-3 text-xs text-slate-500">
+            {open.length} open lead{open.length === 1 ? "" : "s"}, {converted.length} converted student
+            {converted.length === 1 ? "" : "s"}, and {chatThreads.length} chat thread
+            {chatThreads.length === 1 ? "" : "s"} will move with their history.
+          </p>
+        )}
+      </Card>
+
+      {error && <Card className="mt-4 border-rose-200 bg-rose-50 p-4 text-sm text-rose-800">{error}</Card>}
+
       <div className="mt-6 flex gap-1 overflow-x-auto border-b border-slate-200">
         {tabs.map(({ key, label, count, icon: Icon }) => (
           <button
@@ -199,7 +278,7 @@ export default function TelecallerDetail() {
         {tab === "open" &&
           (open.length === 0 ? (
             <Card className="p-8 text-center text-sm text-slate-500">
-              No open leads. Assign some from Telecaller Leads.
+              No open leads. Assign some from Leads.
             </Card>
           ) : (
             <Card className="overflow-hidden">

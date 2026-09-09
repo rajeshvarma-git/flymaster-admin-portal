@@ -1117,20 +1117,6 @@ export default function LeadAlerts() {
     ? Math.max(...waiting.map((lead) => hoursSince(lead.created_at) ?? 0))
     : 0;
 
-  const recentReminders = useMemo(() => {
-    const seen = new Set<string>();
-    return store.notifications
-      .filter((row) => (row.title || "").toLowerCase().includes("waiting"))
-      .sort((a, b) => String(b.created_at || "").localeCompare(String(a.created_at || "")))
-      .filter((row) => {
-        const key = `${row.title}|${row.created_at?.slice(0, 16) || ""}`;
-        if (seen.has(key)) return false;
-        seen.add(key);
-        return true;
-      })
-      .slice(0, 5);
-  }, [store.notifications]);
-
   const selectedAssignee = assignMode === "telecaller" ? telecallerId : counselorId;
 
   const runNow = async () => {
@@ -1305,28 +1291,6 @@ export default function LeadAlerts() {
           <p className="p-8 text-center text-sm text-slate-500">All caught up — every lead has a telecaller or counselor.</p>
         )}
       </Card>
-
-      {recentReminders.length > 0 && (
-        <Card className="mt-4 overflow-hidden">
-          <p className="border-b border-slate-200 px-4 py-3 text-sm font-bold text-slate-700">Your recent reminders</p>
-          {recentReminders.map((row) => (
-            <div key={row.id} className="border-b border-slate-100 px-4 py-3 last:border-b-0">
-              <p className="text-sm font-medium">{row.title}</p>
-              <p className="mt-0.5 text-sm text-slate-600">{row.message}</p>
-              {row.created_at && (
-                <p className="mt-1 text-[11px] text-slate-400">
-                  {new Date(row.created_at).toLocaleString(undefined, {
-                    month: "short",
-                    day: "numeric",
-                    hour: "2-digit",
-                    minute: "2-digit",
-                  })}
-                </p>
-              )}
-            </div>
-          ))}
-        </Card>
-      )}
     </div>
   );
 }

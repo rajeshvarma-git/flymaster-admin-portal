@@ -21,7 +21,7 @@
 // //   const clockedIn = store.attendance.filter((row) => row.date === today && row.clock_in && !row.clock_out);
 
 // //   const stats = [
-// //     { label: "Telecaller leads", value: leads.length, icon: PhoneCall, to: "/admin/leads" },
+// //     { label: "Leads", value: leads.length, icon: PhoneCall, to: "/admin/leads" },
 // //     { label: "Students", value: students.length, icon: GraduationCap, to: "/admin/students" },
 // //     { label: "Need counselor", value: unassignedCounselor.length, icon: Target, to: "/admin/unassigned" },
 // //     { label: "Hot leads", value: hot.length, icon: Flame, to: "/admin/leads" },
@@ -132,7 +132,7 @@
 //   const clockedIn = store.attendance.filter((row) => row.date === today && row.clock_in && !row.clock_out);
 
 //   const stats = [
-//     { label: "Telecaller leads", value: leads.length, icon: PhoneCall, to: "/admin/leads" },
+//     { label: "Leads", value: leads.length, icon: PhoneCall, to: "/admin/leads" },
 //     { label: "Students", value: students.length, icon: GraduationCap, to: "/admin/students" },
 //     { label: "Need counselor", value: unassignedCounselor.length, icon: Target, to: "/admin/unassigned" },
 //     { label: "Hot leads", value: hot.length, icon: Flame, to: "/admin/leads" },
@@ -249,10 +249,10 @@ export default function Dashboard() {
   const clockedIn = store.attendance.filter((row) => row.date === today && row.clock_in && !row.clock_out);
 
   const stats = [
-    { label: "Telecaller leads", value: leads.length, icon: PhoneCall, to: "/admin/leads" },
+    { label: "Leads", value: leads.length, icon: PhoneCall, to: "/admin/leads" },
     { label: "Hot leads", value: hot.length, icon: Flame, to: "/admin/leads" },
     { label: "Students", value: students.length, icon: GraduationCap, to: "/admin/students" },
-    { label: "Need counselor", value: unassignedCounselor.length, icon: Target, to: "/admin/unassigned" },
+    { label: "Need counselor", value: unassignedCounselor.length, icon: Target, to: "/admin/counselors?tab=assign" },
     { label: "With a counselor", value: withCounselor, icon: Users, to: "/admin/students" },
     { label: "Converted this month", value: convertedThisMonth, icon: GraduationCap, to: "/admin/students" },
     { label: "Docs to review", value: pendingDocs.length, icon: FileText, to: "/admin/documents" },
@@ -265,13 +265,8 @@ export default function Dashboard() {
 
   return (
     <div>
-      <div>
-        <h1 className="text-2xl font-bold">Operations overview</h1>
-        <p className="text-slate-600">Telecaller → convert → country counselor → documents & applications.</p>
-      </div>
-
       {stranded.length > 0 && (
-        <Card className="mt-4 border-rose-200 bg-rose-50 p-4 text-sm text-rose-800">
+        <Card className="border-rose-200 bg-rose-50 p-4 text-sm text-rose-800">
           <strong>{stranded.length} lead{stranded.length === 1 ? "" : "s"} waiting for assignment.</strong>{" "}
           Student portal signups appear here until you assign a telecaller or counselor.{" "}
           <Link to="/admin/alerts" className="font-semibold underline">Open Lead alerts</Link>
@@ -315,22 +310,18 @@ export default function Dashboard() {
 
         <Card className="p-5">
           <h2 className="font-semibold">Counselors on shift today</h2>
-          <p className="mt-1 text-sm text-slate-500">{clockedIn.length} clocked in · {unassignedCounselor.length} students need assignment</p>
+          <p className="mt-1 text-sm text-slate-500">{clockedIn.length} clocked in</p>
           <div className="mt-4 space-y-3">
             {store.counselors.slice(0, 8).map((counselor) => {
               const assigned = store.leads.filter(
                 (lead) => isConvertedStudent(lead) && counselorOwns(counselor, lead.assigned_counselor_id),
               );
-              const onShift = clockedIn.some((row) => row.counselor_id === counselor.id);
               return (
-                <div key={counselor.id} className="flex items-center justify-between rounded-xl border px-3 py-2">
-                  <div>
-                    <p className="text-sm font-medium">{displayName(counselor.first_name, counselor.last_name, counselor.email)}</p>
-                    <p className="text-xs text-slate-500">
-                      {assigned.length} students · {(counselor.specializations || []).join(", ") || "General"}
-                    </p>
-                  </div>
-                  <Badge value={onShift ? "assigned" : "cold"} />
+                <div key={counselor.id} className="rounded-xl border px-3 py-2">
+                  <p className="text-sm font-medium">{displayName(counselor.first_name, counselor.last_name, counselor.email)}</p>
+                  <p className="text-xs text-slate-500">
+                    {assigned.length} students · {(counselor.specializations || []).join(", ") || "General"}
+                  </p>
                 </div>
               );
             })}

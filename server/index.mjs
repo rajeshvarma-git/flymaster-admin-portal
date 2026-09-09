@@ -7465,6 +7465,53 @@ async function transferCounselorStudents(fromCounselorId, toCounselorId) {
   return count;
 }
 
+function telecallerKeyIds(telecaller) {
+  return [String(telecaller.id || "")].filter(Boolean);
+}
+
+function leadOwnedByTelecaller(lead, telecaller) {
+  return telecallerKeyIds(telecaller).includes(String(lead.assigned_telecaller_id || ""));
+}
+
+async function transferTelecallerThreads(fromTelecaller, toTelecaller) {
+  const fromIds = telecallerKeyIds(fromTelecaller);
+  const targetId = String(toTelecaller.id);
+  const convs = await jsonTable("telecaller_conversations");
+  for (const conv of convs) {
+    if (fromIds.includes(String(conv.telecaller_id))) {
+      await jsonUpsert("telecaller_conversations", { ...conv, telecaller_id: targetId });
+    }
+  }
+  for (const fid of fromIds) {
+    if (isUuid(fid) && isUuid(targetId)) {
+      await pool.query("UPDATE telecaller_conversations SET telecaller_id = $1 WHERE telecaller_id = $2", [targetId, fid]).catch(() => {});
+    }
+  }
+}
+
+async function transferTelecallerLeads(fromTelecallerId, toTelecallerId) {
+  const users = await loadUsers();
+  const telecallers = loadTelecallers(users);
+  const from = telecallers.find((row) => row.id === fromTelecallerId);
+  const to = telecallers.find((row) => row.id === toTelecallerId);
+  if (!from) throw new Error("Telecaller not found.");
+  if (!to) throw new Error("Target telecaller not found.");
+  if (from.id === to.id) throw new Error("Choose a different telecaller to transfer to.");
+
+  const targetId = String(to.id);
+  const leads = await jsonTable("student_leads");
+  let count = 0;
+  for (const lead of leads) {
+    if (!leadOwnedByTelecaller(lead, from)) continue;
+    const before = { ...lead };
+    const updated = await applyLeadPatch(lead.id, { assigned_telecaller_id: targetId, status: "assigned" });
+    await syncOwnershipOnAssignment(before, updated);
+    count += 1;
+  }
+  await transferTelecallerThreads(from, to);
+  return count;
+}
+
 async function deactivateCounselor(counselorId) {
   const counselors = await loadCounselors();
   const counselor = counselors.find((row) => row.id === counselorId || row.auth_user_id === counselorId);
@@ -8758,6 +8805,28 @@ app.post("/api/counselors/:id/remove", auth, async (req, res) => {
   }
 });
 
+app.post("/api/telecallers/:id/transfer", auth, async (req, res) => {
+  try {
+    const targetTelecallerId = String(req.body.targetTelecallerId || "");
+    if (!targetTelecallerId) {
+      return res.status(400).json({ error: "Choose a telecaller to transfer leads to." });
+    }
+    const count = await transferTelecallerLeads(req.params.id, targetTelecallerId);
+    if (count > 0) {
+      await notify(
+        targetTelecallerId,
+        "Leads transferred",
+        `${count} lead(s) were transferred to you with full call and chat history.`,
+        "info",
+        "/telecaller",
+      );
+    }
+    res.json({ ok: true, count });
+  } catch (error) {
+    res.status(400).json({ error: error.message || "Could not transfer leads." });
+  }
+});
+
 app.get("/api/university-catalog/countries", auth, async (_req, res) => {
   try {
     res.json(await catalogCountries());
@@ -9193,12 +9262,21 @@ function startUnassignedWatcher() {
 }
 
 async function start() {
-  await applySchema();
-  await ensureAdminUser();
-  app.listen(PORT, "0.0.0.0", () => {
-    console.log(`Fly Masters admin API on port ${PORT}`);
-    startUnassignedWatcher();
+  await new Promise((resolve) => {
+    app.listen(PORT, "0.0.0.0", () => {
+      console.log(`Fly Masters admin API on port ${PORT}`);
+      resolve();
+    });
   });
+
+  try {
+    await applySchema();
+    await ensureAdminUser();
+    startUnassignedWatcher();
+  } catch (error) {
+    console.error(error);
+    process.exit(1);
+  }
 }
 
 start().catch((error) => {

@@ -54,21 +54,23 @@ import { counselorOwns, displayName, initials, isConvertedStudent, studentOwns }
 import { Badge } from "@/components/ui/Badge";
 import { Card } from "@/components/ui/Card";
 
-export default function Counselors() {
+export default function Counselors({ hideHeader = false }: { hideHeader?: boolean }) {
   const store = useAdminStore();
 
   return (
     <div>
-      <div className="mb-6 flex items-center gap-3">
-        <Shield className="h-6 w-6 text-sky-500" />
-        <div>
-          <h1 className="text-2xl font-bold">Counselors</h1>
-          <p className="text-slate-600">
-            Country specialists for students and open leads. Open a counselor to see their students, conversations,
-            and documents.
-          </p>
+      {!hideHeader && (
+        <div className="mb-6 flex items-center gap-3">
+          <Shield className="h-6 w-6 text-sky-500" />
+          <div>
+            <h1 className="text-2xl font-bold">Counselors</h1>
+            <p className="text-slate-600">
+              Country specialists for students and open leads. Open a counselor to see their students, conversations,
+              and documents.
+            </p>
+          </div>
         </div>
-      </div>
+      )}
 
       <Card className="overflow-hidden">
         {store.counselors.filter((counselor) => counselor.is_active !== false).map((counselor) => {

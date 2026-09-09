@@ -161,7 +161,7 @@ function waitingLabel(days: number) {
   return `Waiting ${days} days`;
 }
 
-export default function Unassigned() {
+export default function Unassigned({ hideHeader = false }: { hideHeader?: boolean }) {
   const store = useAdminStore();
   const [counselorId, setCounselorId] = useState("");
   const [selected, setSelected] = useState<string[]>([]);
@@ -198,15 +198,17 @@ export default function Unassigned() {
 
   return (
     <div>
-      <div className="mb-6 flex items-center gap-3">
-        <Globe className="h-6 w-6 text-sky-500" />
-        <div>
-          <h1 className="text-2xl font-bold">Counselor assignment</h1>
-          <p className="text-slate-600">
-            Every converted student waits here until you choose their counselor. Oldest first.
-          </p>
+      {!hideHeader && (
+        <div className="mb-6 flex items-center gap-3">
+          <Globe className="h-6 w-6 text-sky-500" />
+          <div>
+            <h1 className="text-2xl font-bold">Counselor assignment</h1>
+            <p className="text-slate-600">
+              Every converted student waits here until you choose their counselor. Oldest first.
+            </p>
+          </div>
         </div>
-      </div>
+      )}
 
       {overdue.length > 0 && (
         <Card className="mb-4 border-rose-200 bg-rose-50 p-4 text-sm text-rose-800">

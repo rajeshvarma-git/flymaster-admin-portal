@@ -330,7 +330,7 @@ export default function CounselorDetail() {
             </p>
             {counselor.bio && <p className="mt-3 text-sm text-slate-600">{counselor.bio}</p>}
           </div>
-          <Link to="/admin/unassigned">
+          <Link to="/admin/counselors?tab=assign">
             <Button size="sm">Assign students</Button>
           </Link>
         </div>

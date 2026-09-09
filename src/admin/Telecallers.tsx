@@ -83,9 +83,6 @@ export default function Telecallers() {
         <PhoneCall className="h-6 w-6 text-sky-500" />
         <div>
           <h1 className="text-2xl font-bold">Telecallers</h1>
-          <p className="text-slate-600">
-            First-contact team. Open a telecaller to see their leads, conversions and call history.
-          </p>
         </div>
       </div>
 

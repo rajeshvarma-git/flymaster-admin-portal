@@ -1951,7 +1951,6 @@ import { counselorLabel, counselorOwns, displayName, initials, isConvertedStuden
 import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
 import { Card } from "@/components/ui/Card";
-import { Select } from "@/components/ui/Field";
 import type { DocumentRow } from "@/lib/types";
 
 interface ChecklistItem {
@@ -2024,8 +2023,6 @@ export default function StudentDetail() {
   const store = useAdminStore();
   const [tab, setTab] = useState<Tab>(() => parseTab(searchParams.get("tab")));
   const [busyId, setBusyId] = useState<string | null>(null);
-  const [pickedCounselor, setPickedCounselor] = useState("");
-  const [pickedTelecaller, setPickedTelecaller] = useState("");
   const [checklist, setChecklist] = useState<ChecklistResponse | null>(null);
   const [error, setError] = useState("");
 
@@ -2118,78 +2115,8 @@ export default function StudentDetail() {
   const hasOffer = apps.some((app) => app.status === "offer");
 
   const counselor = store.counselors.find((row) => counselorOwns(row, student.assigned_counselor_id)) || null;
-  const telecaller = store.telecallers.find((row) => row.id === student.assigned_telecaller_id) || null;
   const counselorLoad = (counselorId: string) =>
     store.leads.filter((lead) => isConvertedStudent(lead) && lead.assigned_counselor_id === counselorId).length;
-  const telecallerLoad = (telecallerId: string) =>
-    store.leads.filter((lead) => String(lead.assigned_telecaller_id || "") === telecallerId).length;
-
-  const assignCounselor = async (counselorId: string) => {
-    if (!counselorId) return;
-    setBusyId("counselor");
-    setError("");
-    try {
-      await api("/leads/bulk-assign", { method: "POST", body: { ids: [student.id], counselorId } });
-      setPickedCounselor("");
-      await refreshStore();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Could not assign the counselor.");
-    } finally {
-      setBusyId(null);
-    }
-  };
-
-  const removeCounselor = async () => {
-    setBusyId("counselor");
-    setError("");
-    try {
-      await api(`/leads/${student.id}`, {
-        method: "PATCH",
-        body: { assigned_counselor_id: null, status: "unassigned" },
-      });
-      setPickedCounselor("");
-      await refreshStore();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Could not remove the counselor.");
-    } finally {
-      setBusyId(null);
-    }
-  };
-
-  const assignTelecaller = async (telecallerId: string) => {
-    if (!telecallerId) return;
-    setBusyId("telecaller");
-    setError("");
-    try {
-      await api(`/leads/${student.id}`, {
-        method: "PATCH",
-        body: { assigned_telecaller_id: telecallerId, status: "assigned" },
-      });
-      setPickedTelecaller("");
-      await refreshStore();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Could not assign the telecaller.");
-    } finally {
-      setBusyId(null);
-    }
-  };
-
-  const removeTelecaller = async () => {
-    setBusyId("telecaller");
-    setError("");
-    try {
-      await api(`/leads/${student.id}`, {
-        method: "PATCH",
-        body: { assigned_telecaller_id: null },
-      });
-      setPickedTelecaller("");
-      await refreshStore();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Could not remove the telecaller.");
-    } finally {
-      setBusyId(null);
-    }
-  };
 
   const decideDoc = async (docId: string, status: "approved" | "rejected") => {
     setBusyId(docId);
@@ -2328,141 +2255,34 @@ export default function StudentDetail() {
       </Card>
 
       <Card className={`mt-4 p-5 ${counselor ? "" : "border-rose-200 bg-rose-50"}`}>
-        <div className="flex flex-wrap items-center justify-between gap-4">
-          <div className="min-w-0">
-            <p className="text-xs font-bold uppercase tracking-wide text-slate-500">Counselor</p>
-            {counselor ? (
-              <Link
-                to={`/admin/counselors/${counselor.id}`}
-                className="mt-2 flex items-center gap-3 transition hover:opacity-80"
-              >
-                <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-navy-900 text-xs font-bold text-white">
-                  {initials(counselor.first_name, counselor.last_name, counselor.email)}
-                </span>
-                <span className="min-w-0">
-                  <span className="block font-semibold">
-                    {displayName(counselor.first_name, counselor.last_name, counselor.email)}
-                  </span>
-                  <span className="block text-xs text-slate-500">
-                    {counselor.specializations?.length ? counselor.specializations.join(", ") : "No country set"} ·{" "}
-                    {counselorLoad(counselor.id)} students
-                  </span>
-                </span>
-              </Link>
-            ) : (
-              <p className="mt-2 text-sm text-rose-800">
-                Not assigned. Nobody owns this student&apos;s documents, applications or messages.
-              </p>
-            )}
-          </div>
-
-          <div className="flex flex-wrap items-end gap-2">
-            <div className="min-w-[240px]">
-              <p className="mb-1.5 text-sm font-medium text-slate-700">
-                {counselor ? "Change counselor" : "Choose counselor"}
-              </p>
-              <Select value={pickedCounselor} onChange={(e) => setPickedCounselor(e.target.value)}>
-                <option value="">Choose counselor</option>
-                {store.counselors
-                  .filter((row) => !counselor || row.id !== counselor.id)
-                  .map((row) => (
-                    <option key={row.id} value={row.id}>
-                      {displayName(row.first_name, row.last_name, row.email)}
-                      {row.specializations?.length ? ` · ${row.specializations.join(", ")}` : ""}
-                      {` · ${counselorLoad(row.id)} students`}
-                    </option>
-                  ))}
-              </Select>
-            </div>
-            <Button
-              size="sm"
-              disabled={busyId === "counselor" || !pickedCounselor}
-              onClick={() => void assignCounselor(pickedCounselor)}
+        <div className="min-w-0">
+          <p className="text-xs font-bold uppercase tracking-wide text-slate-500">Counselor</p>
+          {counselor ? (
+            <Link
+              to={`/admin/counselors/${counselor.id}`}
+              className="mt-2 flex items-center gap-3 transition hover:opacity-80"
             >
-              {counselor ? "Reassign" : "Assign"}
-            </Button>
-            {counselor && (
-              <Button
-                size="sm"
-                variant="secondary"
-                disabled={busyId === "counselor"}
-                onClick={() => void removeCounselor()}
-              >
-                Remove
-              </Button>
-            )}
-          </div>
+              <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-navy-900 text-xs font-bold text-white">
+                {initials(counselor.first_name, counselor.last_name, counselor.email)}
+              </span>
+              <span className="min-w-0">
+                <span className="block font-semibold">
+                  {displayName(counselor.first_name, counselor.last_name, counselor.email)}
+                </span>
+                <span className="block text-xs text-slate-500">
+                  {counselor.specializations?.length ? counselor.specializations.join(", ") : "No country set"} ·{" "}
+                  {counselorLoad(counselor.id)} students
+                </span>
+              </span>
+            </Link>
+          ) : (
+            <p className="mt-2 text-sm text-rose-800">
+              Not assigned. Nobody owns this student&apos;s documents, applications or messages.
+            </p>
+          )}
         </div>
       </Card>
 
-      <Card className="mt-4 p-5">
-        <p className="text-sm font-semibold text-slate-700">Telecaller</p>
-        <div className="mt-3 grid gap-4 lg:grid-cols-2">
-          <div>
-            {telecaller ? (
-              <Link
-                to={`/admin/telecallers/${telecaller.id}`}
-                className="mt-2 flex items-center gap-3 rounded-xl border border-slate-200 p-3 transition hover:border-sky-200"
-              >
-                <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-sky-100 text-sm font-bold text-sky-700">
-                  {initials(telecaller.first_name, telecaller.last_name, telecaller.email)}
-                </span>
-                <span className="min-w-0">
-                  <span className="block font-semibold">
-                    {displayName(telecaller.first_name, telecaller.last_name, telecaller.email)}
-                  </span>
-                  <span className="block text-xs text-slate-500">{telecallerLoad(telecaller.id)} leads assigned</span>
-                </span>
-              </Link>
-            ) : (
-              <p className="mt-2 text-sm text-slate-500">No telecaller assigned.</p>
-            )}
-          </div>
-          <div className="flex flex-wrap items-end gap-2">
-            <div className="min-w-[240px]">
-              <p className="mb-1.5 text-sm font-medium text-slate-700">
-                {telecaller ? "Change telecaller" : "Choose telecaller"}
-              </p>
-              <Select value={pickedTelecaller} onChange={(e) => setPickedTelecaller(e.target.value)}>
-                <option value="">Choose telecaller</option>
-                {store.telecallers
-                  .filter((row) => row.is_active !== false && (!telecaller || row.id !== telecaller.id))
-                  .map((row) => (
-                    <option key={row.id} value={row.id}>
-                      {displayName(row.first_name, row.last_name, row.email)}
-                      {` · ${telecallerLoad(row.id)} leads`}
-                    </option>
-                  ))}
-              </Select>
-            </div>
-            <Button
-              size="sm"
-              disabled={busyId === "telecaller" || !pickedTelecaller}
-              onClick={() => void assignTelecaller(pickedTelecaller)}
-            >
-              {telecaller ? "Reassign" : "Assign"}
-            </Button>
-            {telecaller && (
-              <Button
-                size="sm"
-                variant="secondary"
-                disabled={busyId === "telecaller"}
-                onClick={() => void removeTelecaller()}
-              >
-                Remove
-              </Button>
-            )}
-          </div>
-        </div>
-        <p className="mt-3 text-xs text-slate-500">
-          Reassigning moves chat history to the new telecaller or counselor so they see the full student record.
-        </p>
-      </Card>
-      {silence !== null && silence >= SILENT_DAYS && (
-        <Card className="mt-4 border-rose-200 bg-rose-50 p-4 text-sm text-rose-800">
-          No message exchanged for {silence} days.
-        </Card>
-      )}
       {error && <Card className="mt-4 border-rose-200 bg-rose-50 p-4 text-sm text-rose-800">{error}</Card>}
 
       <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">

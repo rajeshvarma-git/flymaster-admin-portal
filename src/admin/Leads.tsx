@@ -103,7 +103,7 @@
 // //       <div className="mb-6 flex items-center gap-3">
 // //         <PhoneCall className="h-6 w-6 text-sky-500" />
 // //         <div>
-// //           <h1 className="text-2xl font-bold">Telecaller leads</h1>
+// //           <h1 className="text-2xl font-bold">Leads</h1>
 // //           <p className="text-slate-600">
 // //             {leads.length} open leads — telecallers capture details, qualify, then convert to students.
 // //           </p>
@@ -327,7 +327,7 @@
 //       <div className="mb-6 flex items-center gap-3">
 //         <PhoneCall className="h-6 w-6 text-sky-500" />
 //         <div>
-//           <h1 className="text-2xl font-bold">Telecaller leads</h1>
+//           <h1 className="text-2xl font-bold">Leads</h1>
 //           <p className="text-slate-600">
 //             {leads.length} open leads — telecallers capture details, qualify, then convert to students.
 //           </p>
@@ -446,161 +446,123 @@
 //   );
 // }
 
-import { FormEvent, useMemo, useState } from "react";
-import { format } from "date-fns";
-import { Flame, Mail, Phone, PhoneCall } from "lucide-react";
-import { api } from "@/lib/api";
-import { refreshStore, useAdminStore } from "@/lib/store";
-import { counselorLabel, displayName, formatWhen, suggestCounselorForCountries, telecallerLabel } from "@/lib/utils";
+import { useEffect, useMemo, useState } from "react";
+import { Flame, Mail, Phone, PhoneCall, Shield } from "lucide-react";
+import { useSearchParams } from "react-router-dom";
+import { useAdminStore } from "@/lib/store";
+import { counselorLabel, displayName, formatWhen, isConvertedStudent, telecallerLabel } from "@/lib/utils";
 import { Badge } from "@/components/ui/Badge";
-import { Button } from "@/components/ui/Button";
 import { Card } from "@/components/ui/Card";
-import { Input, Label, Select, Textarea } from "@/components/ui/Field";
+import { Input, Select } from "@/components/ui/Field";
 
 const STATUSES = ["cold", "warm", "hot"];
+type OwnerFilter = "telecaller" | "counselor";
+
+function parseOwner(value: string | null): OwnerFilter {
+  return value === "counselor" ? "counselor" : "telecaller";
+}
+
+function isOpenLead(lead: { entity_type?: string; lead_status?: string }) {
+  return !isConvertedStudent(lead);
+}
 
 export default function Leads() {
   const store = useAdminStore();
+  const [searchParams, setSearchParams] = useSearchParams();
   const [query, setQuery] = useState("");
   const [status, setStatus] = useState("all");
-  const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState("");
+  const [owner, setOwner] = useState<OwnerFilter>(() => parseOwner(searchParams.get("owner")));
+
+  useEffect(() => {
+    setOwner(parseOwner(searchParams.get("owner")));
+  }, [searchParams]);
+
+  const openLeads = useMemo(
+    () => store.leads.filter((lead) => isOpenLead(lead)),
+    [store.leads],
+  );
+
+  const telecallerLeads = useMemo(
+    () => openLeads.filter((lead) => !lead.assigned_counselor_id),
+    [openLeads],
+  );
+
+  const counselorLeads = useMemo(
+    () => openLeads.filter((lead) => Boolean(lead.assigned_counselor_id)),
+    [openLeads],
+  );
+
+  const selectOwner = (next: OwnerFilter) => {
+    setOwner(next);
+    const params = new URLSearchParams(searchParams);
+    if (next === "telecaller") params.delete("owner");
+    else params.set("owner", next);
+    setSearchParams(params, { replace: true });
+  };
 
   const leads = useMemo(() => {
     const q = query.trim().toLowerCase();
-    return store.leads
-      .filter((lead) => lead.entity_type !== "student" && lead.lead_status !== "converted")
+    const pool = owner === "counselor" ? counselorLeads : telecallerLeads;
+    return pool
       .filter((lead) => status === "all" || lead.lead_status === status)
       .filter((lead) =>
         `${lead.first_name} ${lead.last_name} ${lead.email} ${lead.phone} ${lead.field_of_interest}`.toLowerCase().includes(q),
       )
       .sort((a, b) => String(b.created_at || "").localeCompare(String(a.created_at || "")));
-  }, [store.leads, query, status]);
-
-  const selected = store.leads.find((lead) => lead.id === selectedId) || null;
-
-  const onAdd = async (e: FormEvent<HTMLFormElement>) => {
-    e.preventDefault();
-    const data = new FormData(e.currentTarget);
-    setBusy(true);
-    setError("");
-    try {
-      await api("/leads", {
-        method: "POST",
-        body: {
-          firstName: String(data.get("firstName")),
-          lastName: String(data.get("lastName")),
-          email: String(data.get("email")),
-          phone: String(data.get("phone") || ""),
-          field: String(data.get("field") || ""),
-          score: String(data.get("score") || ""),
-          countries: String(data.get("countries") || ""),
-          telecallerId: String(data.get("telecallerId") || "") || null,
-          counselorId: String(data.get("counselorId") || "") || null,
-        },
-      });
-      e.currentTarget.reset();
-      await refreshStore();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Could not add the lead.");
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const save = async () => {
-    if (!selected) return;
-    const form = document.getElementById("lead-edit") as HTMLFormElement | null;
-    if (!form) return;
-    const data = new FormData(form);
-    const notes = String(data.get("notes") || "");
-    setBusy(true);
-    setError("");
-    try {
-      await api(`/leads/${selected.id}`, {
-        method: "PATCH",
-        body: {
-          lead_status: String(data.get("status")),
-          lead_stage: String(data.get("status")),
-          assigned_telecaller_id: String(data.get("telecallerId") || "") || null,
-          assigned_counselor_id: String(data.get("counselorId") || "") || null,
-          status:
-            String(data.get("telecallerId") || data.get("counselorId") || "") ? "assigned" : "new",
-          next_follow_up_date: String(data.get("follow") || "") || null,
-          last_contact_date: new Date().toISOString(),
-          field_of_interest: String(data.get("field") || ""),
-          academic_score: String(data.get("score") || ""),
-          preferred_countries: String(data.get("countries") || "")
-            .split(",")
-            .map((item) => item.trim())
-            .filter(Boolean),
-          notes: notes ? `${selected.notes || ""}\n[${format(new Date(), "PPP")}] ${notes}`.trim() : selected.notes,
-        },
-      });
-      setSelectedId(null);
-      await refreshStore();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Could not save the lead.");
-    } finally {
-      setBusy(false);
-    }
-  };
+  }, [counselorLeads, owner, query, status, telecallerLeads]);
 
   return (
     <div>
       <div className="mb-6 flex items-center gap-3">
         <PhoneCall className="h-6 w-6 text-sky-500" />
         <div>
-          <h1 className="text-2xl font-bold">Telecaller leads</h1>
-          <p className="text-slate-600">
-            {leads.length} open leads — telecallers capture details, qualify, then convert to students.
-          </p>
+          <h1 className="text-2xl font-bold">Leads</h1>
         </div>
       </div>
 
-      {(error || store.error) && (
+      {store.error && (
         <Card className="mb-4 border-rose-200 bg-rose-50 p-4 text-sm text-rose-800">
-          {error || store.error}
+          {store.error}
         </Card>
       )}
 
-      <Card className="mb-4 p-5">
-        <p className="font-semibold">Add a lead</p>
-        <form className="mt-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-3" onSubmit={(e) => void onAdd(e)}>
-          <div><Label>First name</Label><Input name="firstName" required /></div>
-          <div><Label>Last name</Label><Input name="lastName" required /></div>
-          <div><Label>Email</Label><Input name="email" type="email" required /></div>
-          <div><Label>Phone</Label><Input name="phone" /></div>
-          <div><Label>Field of interest</Label><Input name="field" /></div>
-          <div><Label>Academic score</Label><Input name="score" placeholder="85%, 7.5 IELTS" /></div>
-          <div><Label>Preferred countries</Label><Input name="countries" placeholder="UK, Canada" required /></div>
-          <div>
-            <Label>Assign telecaller</Label>
-            <Select name="telecallerId" defaultValue="">
-              <option value="">Unassigned</option>
-              {store.telecallers.map((item) => (
-                <option key={item.id} value={item.id}>{displayName(item.first_name, item.last_name, item.email)}</option>
-              ))}
-            </Select>
-          </div>
-          <div>
-            <Label>Assign counselor</Label>
-            <Select name="counselorId" defaultValue="">
-              <option value="">Unassigned</option>
-              {store.counselors.map((item) => (
-                <option key={item.id} value={item.id}>
-                  {displayName(item.first_name, item.last_name, item.email)}
-                  {item.specializations?.length ? ` · ${item.specializations.join(", ")}` : ""}
-                </option>
-              ))}
-            </Select>
-          </div>
-          <div className="flex items-end"><Button type="submit" disabled={busy}>Add lead</Button></div>
-        </form>
-      </Card>
-
-      <div className="mb-4 flex flex-wrap gap-3">
+      <div className="mb-4 flex flex-wrap items-center gap-3">
+        <div className="inline-flex rounded-xl border border-slate-200 bg-slate-100 p-1">
+          <button
+            type="button"
+            onClick={() => selectOwner("telecaller")}
+            className={`inline-flex items-center gap-2 rounded-lg px-3 py-2 text-sm font-semibold transition ${
+              owner === "telecaller" ? "bg-white text-navy-900 shadow-sm" : "text-slate-600 hover:text-navy-900"
+            }`}
+          >
+            <PhoneCall className="h-4 w-4" />
+            Telecaller
+            <span
+              className={`rounded-full px-2 py-0.5 text-[11px] font-bold ${
+                owner === "telecaller" ? "bg-sky-100 text-sky-800" : "bg-slate-200 text-slate-600"
+              }`}
+            >
+              {telecallerLeads.length}
+            </span>
+          </button>
+          <button
+            type="button"
+            onClick={() => selectOwner("counselor")}
+            className={`inline-flex items-center gap-2 rounded-lg px-3 py-2 text-sm font-semibold transition ${
+              owner === "counselor" ? "bg-white text-navy-900 shadow-sm" : "text-slate-600 hover:text-navy-900"
+            }`}
+          >
+            <Shield className="h-4 w-4" />
+            Counselor
+            <span
+              className={`rounded-full px-2 py-0.5 text-[11px] font-bold ${
+                owner === "counselor" ? "bg-sky-100 text-sky-800" : "bg-slate-200 text-slate-600"
+              }`}
+            >
+              {counselorLeads.length}
+            </span>
+          </button>
+        </div>
         <Input className="max-w-sm" placeholder="Search name, email, phone..." value={query} onChange={(e) => setQuery(e.target.value)} />
         <Select className="w-40" value={status} onChange={(e) => setStatus(e.target.value)}>
           <option value="all">All statuses</option>
@@ -625,14 +587,20 @@ export default function Leads() {
                   {(lead.preferred_countries || []).join(", ") || "No country"} · {lead.field_of_interest || "No field"} · {lead.academic_score || "No score"}
                 </p>
                 <p className="mt-1 text-xs text-slate-500">
-                  Telecaller: {telecallerLabel(store.telecallers, lead.assigned_telecaller_id)}
-                  {lead.assigned_telecaller_id && lead.assigned_telecaller_at && (
-                    <> · assigned {formatWhen(lead.assigned_telecaller_at)}</>
-                  )}
-                  {" · "}
-                  Counselor: {counselorLabel(store.counselors, lead.assigned_counselor_id)}
-                  {lead.assigned_counselor_id && lead.assigned_counselor_at && (
-                    <> · assigned {formatWhen(lead.assigned_counselor_at)}</>
+                  {owner === "telecaller" ? (
+                    <>
+                      Telecaller: {telecallerLabel(store.telecallers, lead.assigned_telecaller_id)}
+                      {lead.assigned_telecaller_id && lead.assigned_telecaller_at && (
+                        <> · assigned {formatWhen(lead.assigned_telecaller_at)}</>
+                      )}
+                    </>
+                  ) : (
+                    <>
+                      Counselor: {counselorLabel(store.counselors, lead.assigned_counselor_id)}
+                      {lead.assigned_counselor_id && lead.assigned_counselor_at && (
+                        <> · assigned {formatWhen(lead.assigned_counselor_at)}</>
+                      )}
+                    </>
                   )}
                   {" · "}
                   source {lead.lead_source.replace(/_/g, " ")}
@@ -640,82 +608,17 @@ export default function Leads() {
               </div>
               <div className="flex items-center gap-2">
                 <Badge value={lead.lead_status || "warm"} />
-                <Button size="sm" variant="secondary" onClick={() => setSelectedId(lead.id)}>Manage</Button>
               </div>
             </div>
-            {selectedId === lead.id && selected && (
-              <form id="lead-edit" className="mt-4 grid gap-3 border-t pt-4 sm:grid-cols-2" onSubmit={(e) => { e.preventDefault(); void save(); }}>
-                <div>
-                  <Label>Status</Label>
-                  <Select name="status" defaultValue={selected.lead_status || "warm"}>
-                    {STATUSES.map((item) => <option key={item} value={item}>{item}</option>)}
-                  </Select>
-                </div>
-                <div>
-                  <Label>Telecaller</Label>
-                  <Select name="telecallerId" defaultValue={selected.assigned_telecaller_id || ""}>
-                    <option value="">Unassigned</option>
-                    {store.telecallers.map((item) => (
-                      <option key={item.id} value={item.id}>{displayName(item.first_name, item.last_name, item.email)}</option>
-                    ))}
-                  </Select>
-                </div>
-                <div>
-                  <Label>Counselor</Label>
-                  <Select name="counselorId" defaultValue={selected.assigned_counselor_id || ""}>
-                    <option value="">Unassigned</option>
-                    {store.counselors.map((item) => (
-                      <option key={item.id} value={item.id}>
-                        {displayName(item.first_name, item.last_name, item.email)}
-                        {item.specializations?.length ? ` · ${item.specializations.join(", ")}` : ""}
-                      </option>
-                    ))}
-                  </Select>
-                </div>
-                {suggestCounselorForCountries(store.counselors, selected.preferred_countries || []) && (
-                  <p className="sm:col-span-2 text-xs text-slate-500">
-                    Suggested counselor:{" "}
-                    {counselorLabel(
-                      store.counselors,
-                      suggestCounselorForCountries(store.counselors, selected.preferred_countries || [])?.id,
-                    )}
-                  </p>
-                )}
-                <div><Label>Field</Label><Input name="field" defaultValue={selected.field_of_interest || ""} /></div>
-                <div><Label>Score</Label><Input name="score" defaultValue={selected.academic_score || ""} /></div>
-                <div className="sm:col-span-2">
-                  <Label>Preferred countries</Label>
-                  <Input name="countries" defaultValue={(selected.preferred_countries || []).join(", ")} />
-                </div>
-                <div>
-                  <Label>Next follow-up</Label>
-                  <Input name="follow" type="date" defaultValue={selected.next_follow_up_date?.slice(0, 10) || ""} />
-                </div>
-                <div className="sm:col-span-2">
-                  <Label>Call notes</Label>
-                  <Textarea name="notes" placeholder="Telecaller notes from the call..." />
-                </div>
-                {selected.notes && <p className="sm:col-span-2 whitespace-pre-wrap text-xs text-slate-500">{selected.notes}</p>}
-                {(selected.assigned_telecaller_at || selected.assigned_counselor_at) && (
-                  <p className="sm:col-span-2 text-xs text-slate-500">
-                    {selected.assigned_telecaller_id && selected.assigned_telecaller_at && (
-                      <>Telecaller assigned {formatWhen(selected.assigned_telecaller_at)}</>
-                    )}
-                    {selected.assigned_telecaller_id && selected.assigned_telecaller_at && selected.assigned_counselor_id && selected.assigned_counselor_at && " · "}
-                    {selected.assigned_counselor_id && selected.assigned_counselor_at && (
-                      <>Counselor assigned {formatWhen(selected.assigned_counselor_at)}</>
-                    )}
-                  </p>
-                )}
-                <div className="flex flex-wrap gap-2">
-                  <Button type="submit" disabled={busy}>Save</Button>
-                  <Button type="button" variant="ghost" onClick={() => setSelectedId(null)}>Cancel</Button>
-                </div>
-              </form>
-            )}
           </Card>
         ))}
-        {leads.length === 0 && <Card className="p-8 text-center text-sm text-slate-500">No open leads match this filter.</Card>}
+        {leads.length === 0 && (
+          <Card className="p-8 text-center text-sm text-slate-500">
+            {owner === "counselor"
+              ? "No counselor-assigned open leads match this filter."
+              : "No telecaller open leads match this filter."}
+          </Card>
+        )}
       </div>
     </div>
   );

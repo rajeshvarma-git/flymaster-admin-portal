@@ -507,7 +507,10 @@ import AdminLayout from "@/admin/AdminLayout";
 import Dashboard from "@/admin/Dashboard";
 import LeadAlerts from "@/admin/Leadalerts";
 import Leads from "@/admin/Leads";
-import Unassigned from "@/admin/Unassigned";
+import LeadDetail from "@/admin/Leaddetail";
+import CounselorsHub from "@/admin/CounselorsHub";
+import CounselorDetail from "@/admin/Counselordetail";
+import StudentDetail from "@/admin/Studentdetail";
 import Students from "@/admin/Students";
 import Documents from "@/admin/Documents";
 import Applications from "@/admin/Applications";
@@ -515,9 +518,6 @@ import Shortlists from "@/admin/Shortlists";
 import ChatMonitor from "@/admin/ChatMonitor";
 import AiChat from "@/admin/AiChat";
 import UsersPage from "@/admin/Users";
-import Counselors from "@/admin/Counselors";
-import CounselorDetail from "@/admin/Counselordetail";
-import StudentDetail from "@/admin/Studentdetail";
 import HR from "@/admin/HR";
 import Universities from "@/admin/Universities";
 import Checklists from "@/admin/Checklists";
@@ -571,7 +571,8 @@ export default function App() {
               <Route index element={<Dashboard />} />
               <Route path="alerts" element={<LeadAlerts />} />
               <Route path="leads" element={<Leads />} />
-              <Route path="unassigned" element={<Unassigned />} />
+              <Route path="leads/:id" element={<LeadDetail />} />
+              <Route path="unassigned" element={<Navigate to="/admin/counselors?tab=assign" replace />} />
               <Route path="students" element={<Students />} />
               <Route path="students/:id" element={<StudentDetail />} />
               <Route path="documents" element={<Documents />} />
@@ -580,7 +581,7 @@ export default function App() {
               <Route path="chat" element={<ChatMonitor />} />
               <Route path="ai-chat" element={<AiChat />} />
               <Route path="users" element={<UsersPage />} />
-              <Route path="counselors" element={<Counselors />} />
+              <Route path="counselors" element={<CounselorsHub />} />
               <Route path="counselors/:id" element={<CounselorDetail />} />
               <Route path="hr" element={<HR />} />
               <Route path="universities" element={<Universities />} />

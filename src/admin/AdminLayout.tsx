@@ -34,7 +34,7 @@
 // // //   {
 // // //     title: "CRM",
 // // //     items: [
-// // //       { to: "/admin/leads", label: "Telecaller Leads", icon: PhoneCall, end: false },
+// // //       { to: "/admin/leads", label: "Leads", icon: PhoneCall, end: false },
 // // //       { to: "/admin/telecallers", label: "Telecallers", icon: Phone, end: false },
 // // //       { to: "/admin/unassigned", label: "Counselor Assign", icon: Target, end: false },
 // // //       { to: "/admin/students", label: "Students", icon: GraduationCap, end: false },
@@ -208,7 +208,7 @@
 // //   {
 // //     title: "CRM",
 // //     items: [
-// //       { to: "/admin/leads", label: "Telecaller Leads", icon: PhoneCall, end: false },
+// //       { to: "/admin/leads", label: "Leads", icon: PhoneCall, end: false },
 // //       { to: "/admin/telecallers", label: "Telecallers", icon: Phone, end: false },
 // //       { to: "/admin/unassigned", label: "Counselor Assign", icon: Target, end: false },
 // //       { to: "/admin/students", label: "Students", icon: GraduationCap, end: false },
@@ -376,7 +376,7 @@
 //   {
 //     title: "CRM",
 //     items: [
-//       { to: "/admin/leads", label: "Telecaller Leads", icon: PhoneCall, end: false },
+//       { to: "/admin/leads", label: "Leads", icon: PhoneCall, end: false },
 //       { to: "/admin/telecallers", label: "Telecallers", icon: Phone, end: false },
 //       { to: "/admin/unassigned", label: "Counselor Assign", icon: Target, end: false },
 //       { to: "/admin/students", label: "Students", icon: GraduationCap, end: false },
@@ -526,7 +526,6 @@ import {
   Phone,
   PhoneCall,
   Shield,
-  Target,
   Users,
   Wallet,
   X,
@@ -536,6 +535,7 @@ import { useAuth } from "@/context/AuthContext";
 import { displayName, initials, isConvertedStudent, openLeadNeedsOwner } from "@/lib/utils";
 import { Button } from "@/components/ui/Button";
 import { useAdminStore } from "@/lib/store";
+import NotificationBell from "@/components/NotificationBell";
 
 const groups = [
   {
@@ -548,9 +548,9 @@ const groups = [
   {
     title: "CRM",
     items: [
-      { to: "/admin/leads", label: "Telecaller Leads", icon: PhoneCall, end: false },
+      { to: "/admin/leads", label: "Leads", icon: PhoneCall, end: false },
       { to: "/admin/telecallers", label: "Telecallers", icon: Phone, end: false },
-      { to: "/admin/unassigned", label: "Counselor Assign", icon: Target, end: false },
+      { to: "/admin/counselors", label: "Counselors", icon: Shield, end: false },
       { to: "/admin/students", label: "Students", icon: GraduationCap, end: false },
     ],
   },
@@ -558,7 +558,6 @@ const groups = [
     title: "People",
     items: [
       { to: "/admin/users", label: "Users", icon: Users, end: false },
-      { to: "/admin/counselors", label: "Counselors", icon: Shield, end: false },
       { to: "/admin/hr", label: "HR", icon: Wallet, end: false },
     ],
   },
@@ -619,7 +618,7 @@ export default function AdminLayout() {
                 {item.label === "Documents" && pendingDocs > 0 && (
                   <span className="ml-auto rounded-full bg-sky-500 px-1.5 text-[10px] font-bold text-white">{pendingDocs}</span>
                 )}
-                {item.label === "Counselor Assign" && unassigned > 0 && (
+                {item.label === "Counselors" && unassigned > 0 && (
                   <span className="ml-auto rounded-full bg-gold-500 px-1.5 text-[10px] font-bold text-navy-950">{unassigned}</span>
                 )}
                 {item.label === "Lead Alerts" && noTelecaller > 0 && (
@@ -673,13 +672,18 @@ export default function AdminLayout() {
           </aside>
         </>
       )}
-      <main className="flex-1 overflow-y-auto p-4 pt-14 md:p-8 md:pt-8">
+      <main className="flex-1 overflow-y-auto">
+        <div className="sticky top-0 z-30 flex items-center justify-end border-b border-slate-200 bg-slate-50 px-4 py-2 md:px-8">
+          <NotificationBell />
+        </div>
+        <div className="p-4 pt-14 md:p-8 md:pt-8">
         {store.error && (
           <div className="mb-4 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
             {store.error}
           </div>
         )}
         <Outlet />
+        </div>
       </main>
     </div>
   );

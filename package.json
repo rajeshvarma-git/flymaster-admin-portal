@@ -4,7 +4,7 @@
   "version": "1.0.0",
   "type": "module",
   "scripts": {
-    "dev": "concurrently -k \"node server/index.mjs\" \"vite\"",
+    "dev": "concurrently -k \"node server/index.mjs\" \"node scripts/wait-for-api.mjs && vite\"",
     "dev:web": "vite",
     "dev:api": "node server/index.mjs",
     "build": "tsc -b && vite build",
