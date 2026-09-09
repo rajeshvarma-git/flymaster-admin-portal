@@ -1177,9 +1177,6 @@ export default function LeadAlerts() {
         <AlarmClock className="h-6 w-6 text-sky-500" />
         <div>
           <h1 className="text-2xl font-bold">Lead alerts</h1>
-          <p className="text-slate-600">
-            New portal signups land here. Pick a telecaller to call them, or a counselor to support them directly.
-          </p>
         </div>
       </div>
 

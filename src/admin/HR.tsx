@@ -63,7 +63,6 @@ export default function HR() {
         <Wallet className="h-6 w-6 text-sky-500" />
         <div>
           <h1 className="text-2xl font-bold">HR</h1>
-          <p className="text-slate-600">Leave approval, attendance, and salary for counselors.</p>
         </div>
       </div>
       <div className="mb-4 flex gap-2">

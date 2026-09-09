@@ -38,10 +38,6 @@ export default function CounselorsHub() {
         <Shield className="h-6 w-6 text-sky-500" />
         <div>
           <h1 className="text-2xl font-bold">Counselors</h1>
-          <p className="text-slate-600">
-            Assign converted students to country specialists, then open each counselor for their students,
-            conversations, and documents.
-          </p>
         </div>
       </div>
 

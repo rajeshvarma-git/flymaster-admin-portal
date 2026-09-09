@@ -1942,7 +1942,7 @@
 // }
 
 import { useEffect, useMemo, useState } from "react";
-import { Link, useParams, useSearchParams } from "react-router-dom";
+import { Link, Navigate, useParams, useSearchParams } from "react-router-dom";
 import { format } from "date-fns";
 import { ArrowLeft, BookOpen, FileText, MessageCircle, MessagesSquare, PhoneCall, University, User } from "lucide-react";
 import { api } from "@/lib/api";
@@ -2029,8 +2029,14 @@ export default function StudentDetail() {
   const from = searchParams.get("from");
   const backTo = from?.startsWith("telecaller/")
     ? `/admin/telecallers/${from.slice("telecaller/".length)}`
-    : "/admin/students";
-  const backLabel = from?.startsWith("telecaller/") ? "Back to telecaller" : "Back to students";
+    : from?.startsWith("counselor/")
+      ? `/admin/counselors/${from.slice("counselor/".length)}`
+      : "/admin/students";
+  const backLabel = from?.startsWith("telecaller/")
+    ? "Back to telecaller"
+    : from?.startsWith("counselor/")
+      ? "Back to counselor"
+      : "Back to students";
 
   useEffect(() => {
     setTab(parseTab(searchParams.get("tab")));
@@ -2106,10 +2112,15 @@ export default function StudentDetail() {
     );
   }
 
+  if (!isConvertedStudent(student)) {
+    const params = searchParams.toString();
+    return <Navigate to={`/admin/leads/${student.id}${params ? `?${params}` : ""}`} replace />;
+  }
+
   const lastMessage = messages.length ? messages[messages.length - 1] : null;
-  const convertedAt = student.conversion_date || student.created_at;
+  const convertedAt = student.conversion_date;
   const convertedIsExact = Boolean(student.conversion_date);
-  const silence = daysSince(lastMessage?.created_at || convertedAt);
+  const silence = daysSince(lastMessage?.created_at || convertedAt || student.created_at);
   const progress = docProgress(docs);
   const pendingDocs = docs.filter((doc) => isPendingDoc(doc.status));
   const hasOffer = apps.some((app) => app.status === "offer");
@@ -2187,7 +2198,7 @@ export default function StudentDetail() {
         : "No telecaller recorded",
       Boolean(student.assigned_telecaller_id),
     ],
-    ["Converted to student", convertedIsExact ? whenLabel(convertedAt) : `${whenLabel(convertedAt)} (no conversion date recorded)`, true],
+    ["Converted to student", convertedIsExact ? whenLabel(convertedAt) : "Converted (date not recorded)", true],
     [
       "Counselor assigned",
       student.assigned_counselor_id
@@ -2365,7 +2376,9 @@ export default function StudentDetail() {
                   )}
                 </dd>
                 <dt className="text-slate-500">Converted</dt>
-                <dd className="font-medium">{whenLabel(convertedAt)}{convertedIsExact ? "" : " (estimated)"}</dd>
+                <dd className="font-medium">
+                  {convertedIsExact ? whenLabel(convertedAt) : "Converted (date not recorded)"}
+                </dd>
               </dl>
               <div className="mt-5">
                 <div className="mb-1.5 flex justify-between text-sm">

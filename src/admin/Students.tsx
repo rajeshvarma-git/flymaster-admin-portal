@@ -208,9 +208,6 @@ export default function Students() {
         <GraduationCap className="h-6 w-6 text-sky-500" />
         <div>
           <h1 className="text-2xl font-bold">Students</h1>
-          <p className="text-slate-600">
-            Converted leads. Open a student to see documents, applications, shortlists and both chats in one place.
-          </p>
         </div>
       </div>
 

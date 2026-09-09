@@ -44,7 +44,6 @@ export default function Checklists() {
         <ClipboardList className="h-6 w-6 text-sky-500" />
         <div>
           <h1 className="text-2xl font-bold">Document checklists</h1>
-          <p className="text-slate-600">Required files students see when they upload documents.</p>
         </div>
       </div>
       <Card className="mb-4 p-5">

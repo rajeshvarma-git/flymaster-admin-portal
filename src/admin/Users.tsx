@@ -100,10 +100,6 @@ export default function UsersPage() {
         <Users className="h-6 w-6 text-sky-500" />
         <div>
           <h1 className="text-2xl font-bold">User management</h1>
-          <p className="text-slate-600">Accounts shared by the student website, counselor portal, and this admin app.</p>
-          <p className="mt-1 text-xs text-slate-500">
-            Telecallers handle first contact and conversion. Counselors are assigned after convert by country specialization.
-          </p>
         </div>
       </div>
 

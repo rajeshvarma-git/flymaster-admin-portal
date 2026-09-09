@@ -44,7 +44,6 @@ export default function Notifications() {
         <Bell className="h-6 w-6 text-sky-500" />
         <div>
           <h1 className="text-2xl font-bold">Notifications</h1>
-          <p className="text-slate-600">Send alerts into the student and counselor inboxes.</p>
         </div>
       </div>
       <Card className="mb-4 p-5">

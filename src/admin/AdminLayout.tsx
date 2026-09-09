@@ -519,6 +519,7 @@ import {
   ClipboardList,
   GraduationCap,
   AlarmClock,
+  HelpCircle,
   LayoutDashboard,
   LogOut,
   Menu,
@@ -550,8 +551,8 @@ const groups = [
     items: [
       { to: "/admin/leads", label: "Leads", icon: PhoneCall, end: false },
       { to: "/admin/telecallers", label: "Telecallers", icon: Phone, end: false },
-      { to: "/admin/counselors", label: "Counselors", icon: Shield, end: false },
       { to: "/admin/students", label: "Students", icon: GraduationCap, end: false },
+      { to: "/admin/counselors", label: "Counselors", icon: Shield, end: false },
     ],
   },
   {
@@ -572,7 +573,7 @@ const groups = [
     title: "System",
     items: [
       { to: "/admin/notifications", label: "Notifications", icon: Bell, end: false },
-      { to: "/admin/health", label: "Health", icon: Shield, end: false },
+      { to: "/admin/help", label: "Help", icon: HelpCircle, end: false },
     ],
   },
 ];

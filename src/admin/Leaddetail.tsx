@@ -55,8 +55,14 @@ export default function LeadDetail() {
   const from = searchParams.get("from");
   const backTo = from?.startsWith("telecaller/")
     ? `/admin/telecallers/${from.slice("telecaller/".length)}`
-    : "/admin/leads";
-  const backLabel = from?.startsWith("telecaller/") ? "Back to telecaller" : "Back to leads";
+    : from?.startsWith("counselor/")
+      ? `/admin/counselors/${from.slice("counselor/".length)}`
+      : "/admin/leads";
+  const backLabel = from?.startsWith("telecaller/")
+    ? "Back to telecaller"
+    : from?.startsWith("counselor/")
+      ? "Back to counselor"
+      : "Back to leads";
 
   useEffect(() => {
     setTab(parseTab(searchParams.get("tab")));

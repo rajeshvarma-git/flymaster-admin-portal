@@ -524,7 +524,7 @@ import Checklists from "@/admin/Checklists";
 import Notifications from "@/admin/Notifications";
 import Telecallers from "@/admin/Telecallers";
 import TelecallerDetail from "@/admin/TelecallerDetail";
-import Health from "@/admin/Health";
+import Help from "@/admin/Help";
 
 class ErrorBoundary extends Component<{ children: ReactNode }, { error: string }> {
   state = { error: "" };
@@ -589,7 +589,8 @@ export default function App() {
               <Route path="notifications" element={<Notifications />} />
               <Route path="telecallers" element={<Telecallers />} />
               <Route path="telecallers/:id" element={<TelecallerDetail />} />
-              <Route path="health" element={<Health />} />
+              <Route path="help" element={<Help />} />
+              <Route path="health" element={<Navigate to="/admin/help" replace />} />
             </Route>
             <Route path="*" element={<NotFound />} />
           </Routes>

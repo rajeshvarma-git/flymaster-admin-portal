@@ -6936,6 +6936,7 @@ function requireRole(roles, label) {
 
 const auth = [session, requireRole(ADMIN_ROLES, "Admin")];
 const telecallerAuth = [session, requireRole(["telecaller"], "Telecaller")];
+const counselorAuth = [session, requireRole(["counselor"], "Counselor")];
 
 function requireSuperAdmin(req, res, next) {
   if (req.user?.role !== "super_admin") {
@@ -6960,9 +6961,8 @@ function normalizeCountry(value) {
   return String(value || "").trim().toLowerCase();
 }
 
-// Self-serve sources (the student portal and the public AI advisor) mean the person
-// found us and typed their own preferences. That is the highest intent we get, so they
-// enter the pipeline as a HOT LEAD. They only become a student when a telecaller converts them.
+// Self-serve sources enter as HOT LEADS. They become students only when their assigned
+// counselor converts them from the counselor portal.
 const SELF_SERVE_SOURCES = ["student_site", "student_chat"];
 
 function asLead(row) {
@@ -7465,53 +7465,6 @@ async function transferCounselorStudents(fromCounselorId, toCounselorId) {
   return count;
 }
 
-function telecallerKeyIds(telecaller) {
-  return [String(telecaller.id || "")].filter(Boolean);
-}
-
-function leadOwnedByTelecaller(lead, telecaller) {
-  return telecallerKeyIds(telecaller).includes(String(lead.assigned_telecaller_id || ""));
-}
-
-async function transferTelecallerThreads(fromTelecaller, toTelecaller) {
-  const fromIds = telecallerKeyIds(fromTelecaller);
-  const targetId = String(toTelecaller.id);
-  const convs = await jsonTable("telecaller_conversations");
-  for (const conv of convs) {
-    if (fromIds.includes(String(conv.telecaller_id))) {
-      await jsonUpsert("telecaller_conversations", { ...conv, telecaller_id: targetId });
-    }
-  }
-  for (const fid of fromIds) {
-    if (isUuid(fid) && isUuid(targetId)) {
-      await pool.query("UPDATE telecaller_conversations SET telecaller_id = $1 WHERE telecaller_id = $2", [targetId, fid]).catch(() => {});
-    }
-  }
-}
-
-async function transferTelecallerLeads(fromTelecallerId, toTelecallerId) {
-  const users = await loadUsers();
-  const telecallers = loadTelecallers(users);
-  const from = telecallers.find((row) => row.id === fromTelecallerId);
-  const to = telecallers.find((row) => row.id === toTelecallerId);
-  if (!from) throw new Error("Telecaller not found.");
-  if (!to) throw new Error("Target telecaller not found.");
-  if (from.id === to.id) throw new Error("Choose a different telecaller to transfer to.");
-
-  const targetId = String(to.id);
-  const leads = await jsonTable("student_leads");
-  let count = 0;
-  for (const lead of leads) {
-    if (!leadOwnedByTelecaller(lead, from)) continue;
-    const before = { ...lead };
-    const updated = await applyLeadPatch(lead.id, { assigned_telecaller_id: targetId, status: "assigned" });
-    await syncOwnershipOnAssignment(before, updated);
-    count += 1;
-  }
-  await transferTelecallerThreads(from, to);
-  return count;
-}
-
 async function deactivateCounselor(counselorId) {
   const counselors = await loadCounselors();
   const counselor = counselors.find((row) => row.id === counselorId || row.auth_user_id === counselorId);
@@ -8009,6 +7962,21 @@ async function ownedLead(telecallerId, leadId) {
   return { lead };
 }
 
+async function ownedCounselorLead(counselorUserId, leadId) {
+  const counselors = await loadCounselors();
+  const counselor = counselors.find(
+    (row) => String(row.auth_user_id || "") === String(counselorUserId) || String(row.id) === String(counselorUserId),
+  );
+  if (!counselor) return { error: "Counselor profile not found." };
+
+  const lead = findLeadJsonRecord(await jsonTable("student_leads"), leadId);
+  if (!lead) return { error: "Lead not found." };
+  if (!leadOwnedByCounselor(lead, counselor)) {
+    return { error: "That lead is not assigned to you." };
+  }
+  return { lead, counselor };
+}
+
 // Telecaller ids are not always real UUIDs (self-signup mints "user-<uuid>"), so chat is
 // stored in the flexible app_records JSON tables rather than the UUID-typed
 // private_conversations/private_messages tables the counselor portal uses.
@@ -8141,6 +8109,63 @@ app.post("/api/telecaller/conversations/:id/read", telecallerAuth, async (req, r
   }
 });
 
+app.post("/api/telecaller/leads", telecallerAuth, async (req, res) => {
+  try {
+    const email = String(req.body.email || "").trim().toLowerCase();
+    if (!email) return res.status(400).json({ error: "Email is required." });
+
+    const rawCountries = req.body.preferred_countries ?? req.body.countries ?? "";
+    const countries = Array.isArray(rawCountries)
+      ? rawCountries.map((item) => String(item).trim()).filter(Boolean)
+      : String(rawCountries).split(",").map((item) => item.trim()).filter(Boolean);
+
+    const studentId = crypto.randomUUID();
+    const assignedAt = new Date().toISOString();
+    const payload = {
+      id: crypto.randomUUID(),
+      user_id: studentId,
+      email,
+      phone: String(req.body.phone || "").trim(),
+      first_name: String(req.body.first_name || req.body.firstName || "").trim(),
+      last_name: String(req.body.last_name || req.body.lastName || "").trim(),
+      preferred_countries: countries,
+      field_of_interest: String(req.body.field_of_interest || req.body.field || "").trim(),
+      academic_score: String(req.body.academic_score || req.body.score || "").trim(),
+      lead_status: "warm",
+      lead_stage: "warm",
+      lead_source: "telecaller_manual",
+      priority: "medium",
+      assigned_telecaller_id: req.user.id,
+      assigned_counselor_id: null,
+      assigned_telecaller_at: assignedAt,
+      assigned_counselor_at: null,
+      entity_type: "lead",
+      status: "assigned",
+      notes: String(req.body.notes || "").trim(),
+      created_at: assignedAt,
+      updated_at: assignedAt,
+    };
+
+    if (isUuid(payload.id) && isUuid(studentId)) {
+      await pool.query(
+        `INSERT INTO student_leads (
+          id, user_id, email, phone, first_name, last_name, preferred_countries, field_of_interest,
+          academic_score, lead_status, lead_stage, lead_source, assigned_telecaller_id, assigned_counselor_id, entity_type, status, notes
+        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'warm','warm',$10,$11,NULL,'lead','assigned',$12)
+        ON CONFLICT (id) DO NOTHING`,
+        [
+          payload.id, studentId, payload.email, payload.phone, payload.first_name, payload.last_name, countries,
+          payload.field_of_interest, payload.academic_score, payload.lead_source, req.user.id, payload.notes,
+        ],
+      ).catch(() => {});
+    }
+    await jsonUpsert("student_leads", payload);
+    res.json(payload);
+  } catch (error) {
+    res.status(500).json({ error: error.message || "Could not create the lead" });
+  }
+});
+
 app.patch("/api/telecaller/leads/:id", telecallerAuth, async (req, res) => {
   try {
     const owned = await ownedLead(req.user.id, req.params.id);
@@ -8202,48 +8227,10 @@ app.post("/api/telecaller/leads/:id/contact", telecallerAuth, async (req, res) =
   }
 });
 
-app.post("/api/telecaller/leads/:id/convert", telecallerAuth, async (req, res) => {
-  try {
-    const owned = await ownedLead(req.user.id, req.params.id);
-    if (owned.error) return res.status(403).json({ error: owned.error });
-    const lead = owned.lead;
-
-    // A lead cannot be converted without the details a counselor needs to act on.
-    const missing = [];
-    if (!(lead.preferred_countries || []).length) missing.push("preferred countries");
-    if (!lead.field_of_interest) missing.push("field of interest");
-    if (!lead.phone) missing.push("phone number");
-    if (missing.length) {
-      return res.status(400).json({ error: `Capture ${missing.join(", ")} before converting.` });
-    }
-
-    const stamp = new Date().toISOString();
-    const updated = await applyLeadPatch(req.params.id, {
-      lead_status: "converted",
-      lead_stage: "converted",
-      entity_type: "student",
-      conversion_date: stamp,
-      last_contact_date: stamp,
-      preferred_countries: lead.preferred_countries,
-      assigned_counselor_id: null,
-      status: "unassigned",
-    });
-
-    const name = updated.first_name || "A student";
-    const users = await loadUsers();
-    for (const admin of users.filter((row) => ADMIN_ROLES.includes(row.role))) {
-      await notify(
-        admin.id,
-        "Student needs a counselor",
-        `${name} was converted and is waiting for you to assign a counselor.`,
-        "warning",
-        "/admin/unassigned",
-      );
-    }
-    res.json({ ok: true, lead: updated });
-  } catch (error) {
-    res.status(500).json({ error: error.message || "Could not convert the lead" });
-  }
+app.post("/api/telecaller/leads/:id/convert", telecallerAuth, (_req, res) => {
+  res.status(403).json({
+    error: "Only the assigned counselor can convert a lead. Ask them to convert it from the counselor portal.",
+  });
 });
 
 /**
@@ -8451,11 +8438,10 @@ app.patch("/api/leads/:id", auth, async (req, res) => {
   if ((patch.assigned_counselor_id || patch.assigned_telecaller_id) && !patch.status) {
     patch.status = "assigned";
   }
-  // Same rule as the convert route: an admin cannot move a lead across the conversion
-  // boundary by editing it, only a telecaller can.
+  // Conversion must go through POST /api/counselor/leads/:id/convert in the counselor portal.
   if (patch.lead_status === "converted" || patch.entity_type === "student") {
     return res.status(403).json({
-      error: "Only the assigned telecaller can convert a lead.",
+      error: "Only the assigned counselor can convert a lead from the counselor portal.",
     });
   }
   const jsonLeads = await jsonTable("student_leads");
@@ -8483,13 +8469,35 @@ app.patch("/api/leads/:id", auth, async (req, res) => {
   res.json({ ok: true, lead: updated });
 });
 
-// Conversion is a telecaller decision. Admins cannot convert a lead — the only route
-// is POST /api/telecaller/leads/:id/convert, which requires the telecaller role and
-// refuses until countries, field of interest and phone have been captured.
+// Admins assign counselors; only the assigned counselor converts a lead from their portal.
 app.post("/api/leads/:id/convert", auth, (_req, res) => {
   res.status(403).json({
-    error: "Only the assigned telecaller can convert a lead. Assign a telecaller and ask them to qualify it.",
+    error: "Only the assigned counselor can convert a lead. They convert it from the counselor portal.",
   });
+});
+
+app.post("/api/counselor/leads/:id/convert", counselorAuth, async (req, res) => {
+  try {
+    const owned = await ownedCounselorLead(req.user.id, req.params.id);
+    if (owned.error) return res.status(403).json({ error: owned.error });
+    const lead = owned.lead;
+    if (lead.entity_type === "student" || lead.lead_status === "converted") {
+      return res.json({ ok: true, lead: asLead(lead) });
+    }
+
+    const stamp = new Date().toISOString();
+    const updated = await applyLeadPatch(req.params.id, {
+      lead_status: "converted",
+      lead_stage: "converted",
+      entity_type: "student",
+      conversion_date: stamp,
+      status: "assigned",
+    });
+
+    res.json({ ok: true, lead: updated });
+  } catch (error) {
+    res.status(500).json({ error: error.message || "Could not convert the lead." });
+  }
 });
 
 app.post("/api/leads/bulk-assign", auth, async (req, res) => {
@@ -8802,28 +8810,6 @@ app.post("/api/counselors/:id/remove", auth, async (req, res) => {
     res.json({ ok: true, transferred });
   } catch (error) {
     res.status(400).json({ error: error.message || "Could not remove counselor." });
-  }
-});
-
-app.post("/api/telecallers/:id/transfer", auth, async (req, res) => {
-  try {
-    const targetTelecallerId = String(req.body.targetTelecallerId || "");
-    if (!targetTelecallerId) {
-      return res.status(400).json({ error: "Choose a telecaller to transfer leads to." });
-    }
-    const count = await transferTelecallerLeads(req.params.id, targetTelecallerId);
-    if (count > 0) {
-      await notify(
-        targetTelecallerId,
-        "Leads transferred",
-        `${count} lead(s) were transferred to you with full call and chat history.`,
-        "info",
-        "/telecaller",
-      );
-    }
-    res.json({ ok: true, count });
-  } catch (error) {
-    res.status(400).json({ error: error.message || "Could not transfer leads." });
   }
 });
 

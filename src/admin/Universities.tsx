@@ -205,9 +205,6 @@ export default function Universities() {
         <Plane className="h-6 w-6 text-sky-500" />
         <div>
           <h1 className="text-2xl font-bold">Universities</h1>
-          <p className="text-slate-600">
-            Upload CSV catalogs, then browse by country, university, and degree type.
-          </p>
         </div>
       </div>
 

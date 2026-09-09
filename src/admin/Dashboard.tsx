@@ -222,7 +222,7 @@
 // }
 
 import { Link } from "react-router-dom";
-import { BookOpen, FileText, Flame, GraduationCap, PhoneCall, Target, Users } from "lucide-react";
+import { BookOpen, FileText, Flame, GraduationCap, LayoutDashboard, PhoneCall, Target, Users } from "lucide-react";
 import { format } from "date-fns";
 import { useAdminStore } from "@/lib/store";
 import { counselorLabel, counselorOwns, displayName, isConvertedStudent, openLeadNeedsOwner, telecallerLabel } from "@/lib/utils";
@@ -265,15 +265,22 @@ export default function Dashboard() {
 
   return (
     <div>
+      <div className="mb-6 flex items-center gap-3">
+        <LayoutDashboard className="h-6 w-6 text-sky-500" />
+        <div>
+          <h1 className="text-2xl font-bold">Dashboard</h1>
+        </div>
+      </div>
+
       {stranded.length > 0 && (
-        <Card className="border-rose-200 bg-rose-50 p-4 text-sm text-rose-800">
+        <Card className="mb-4 border-rose-200 bg-rose-50 p-4 text-sm text-rose-800">
           <strong>{stranded.length} lead{stranded.length === 1 ? "" : "s"} waiting for assignment.</strong>{" "}
           Student portal signups appear here until you assign a telecaller or counselor.{" "}
           <Link to="/admin/alerts" className="font-semibold underline">Open Lead alerts</Link>
         </Card>
       )}
 
-      <div className="mt-6 grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
         {stats.map((item) => (
           <Link key={item.label} to={item.to}>
             <Card className="p-4 transition hover:-translate-y-0.5">

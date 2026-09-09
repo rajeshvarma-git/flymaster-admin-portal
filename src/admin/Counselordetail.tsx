@@ -77,6 +77,14 @@ function docBadge(status: string) {
   return "requested";
 }
 
+function leadDetailUrl(leadId: string, counselorId: string) {
+  return `/admin/leads/${leadId}?from=counselor/${counselorId}`;
+}
+
+function profileUrl(lead: Lead, counselorId: string) {
+  return isConvertedStudent(lead) ? `/admin/students/${lead.id}` : leadDetailUrl(lead.id, counselorId);
+}
+
 export default function CounselorDetail() {
   const { id = "" } = useParams();
   const navigate = useNavigate();
@@ -510,18 +518,25 @@ export default function CounselorDetail() {
               No open leads assigned yet. Assign leads from Lead Alerts.
             </Card>
           ) : (
-            <Card className="overflow-hidden">
+            <>
+              <Card className="mb-4 border-sky-100 bg-sky-50 p-4 text-xs text-slate-700">
+                Open leads stay here until the counselor converts them from the counselor portal. After conversion they
+                move to the Students tab.
+              </Card>
+              <Card className="overflow-hidden">
               {leads.map((lead) => {
                 const wait = waitLabel(lead);
                 const callCount = parseCalls(lead).length;
                 const chatCount = leadChatThreads.find((row) => row.lead?.id === lead.id)?.msgs.length ?? 0;
                 return (
-                  <Link
+                  <div
                     key={lead.id}
-                    to={`/admin/students/${lead.id}`}
-                    className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 px-5 py-4 transition last:border-b-0 hover:bg-slate-50"
+                    className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 px-5 py-4 last:border-b-0"
                   >
-                    <div className="min-w-0">
+                    <Link
+                      to={leadDetailUrl(lead.id, counselor.id)}
+                      className="min-w-0 flex-1 transition hover:opacity-80"
+                    >
                       <p className="font-semibold text-sky-700">
                         {displayName(lead.first_name, lead.last_name, lead.email)}
                       </p>
@@ -536,12 +551,13 @@ export default function CounselorDetail() {
                       <p className={`mt-0.5 text-xs ${wait.late ? "font-semibold text-rose-600" : "text-slate-400"}`}>
                         {wait.text} · Signed up {whenLabel(lead.created_at) || "recently"}
                       </p>
-                    </div>
+                    </Link>
                     <Badge value={lead.lead_status || "hot"} />
-                  </Link>
+                  </div>
                 );
               })}
-            </Card>
+              </Card>
+            </>
           ))}
 
         {tab === "calls" &&
@@ -560,7 +576,7 @@ export default function CounselorDetail() {
                     key={`${entry.lead.id}-${index}`}
                     className="flex flex-wrap items-start justify-between gap-3 border-b border-slate-100 px-5 py-4 last:border-b-0"
                   >
-                    <Link to={`/admin/students/${entry.lead.id}`} className="min-w-0 flex-1 transition hover:opacity-80">
+                    <Link to={profileUrl(entry.lead, counselor.id)} className="min-w-0 flex-1 transition hover:opacity-80">
                       <p className="text-sm font-semibold text-sky-700 hover:underline">
                         {displayName(entry.lead.first_name, entry.lead.last_name, entry.lead.email)}
                       </p>
@@ -587,7 +603,7 @@ export default function CounselorDetail() {
                 <Card key={conv.id} className="overflow-hidden">
                   <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-200 px-4 py-3">
                     <Link
-                      to={lead ? `/admin/students/${lead.id}` : "#"}
+                      to={lead ? profileUrl(lead, counselor.id) : "#"}
                       className="min-w-0 transition hover:opacity-80"
                     >
                       <p className="text-sm font-semibold text-sky-700 hover:underline">
@@ -600,7 +616,7 @@ export default function CounselorDetail() {
                       </p>
                     </Link>
                     {lead && (
-                      <Link to={`/admin/students/${lead.id}`} className="text-xs font-semibold text-sky-600 hover:underline">
+                      <Link to={profileUrl(lead, counselor.id)} className="text-xs font-semibold text-sky-600 hover:underline">
                         View lead profile
                       </Link>
                     )}
