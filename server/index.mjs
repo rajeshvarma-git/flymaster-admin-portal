@@ -6553,6 +6553,9 @@ const TELECALLER_SIGNUP_CODE = process.env.TELECALLER_SIGNUP_CODE || "";
 // In production, set ADMIN_SIGNUP_OPEN=true or ADMIN_SIGNUP_CODE to allow new admin accounts.
 const ADMIN_SIGNUP_OPEN = String(process.env.ADMIN_SIGNUP_OPEN || "").toLowerCase() === "true";
 const ADMIN_SIGNUP_CODE = process.env.ADMIN_SIGNUP_CODE || "";
+const WHATSAPP_VERIFY_TOKEN = process.env.WHATSAPP_VERIFY_TOKEN || "";
+const WHATSAPP_ACCESS_TOKEN = process.env.WHATSAPP_ACCESS_TOKEN || "";
+const WHATSAPP_PHONE_NUMBER_ID = process.env.WHATSAPP_PHONE_NUMBER_ID || "";
 
 const pool = new pg.Pool({
   connectionString: DATABASE_URL,
@@ -8982,6 +8985,128 @@ app.post("/api/notifications/broadcast", auth, async (req, res) => {
     }
   }
   res.json({ ok: true, count: targets.length });
+});
+
+function normalizePhone(value) {
+  return String(value || "").replace(/\D/g, "");
+}
+
+function phonesMatch(left, right) {
+  const a = normalizePhone(left);
+  const b = normalizePhone(right);
+  if (!a || !b) return false;
+  if (a === b) return true;
+  const tail = 10;
+  return a.slice(-tail) === b.slice(-tail);
+}
+
+async function findLeadByPhone(phone) {
+  const leads = await jsonTable("student_leads");
+  return leads.find((row) => phonesMatch(row.phone, phone)) || null;
+}
+
+async function storeIncomingWhatsAppMessage({ from, text, waMessageId }) {
+  const lead = await findLeadByPhone(from);
+  if (!lead) {
+    console.log(`WhatsApp message from unknown number ${from}: ${text.slice(0, 80)}`);
+    return null;
+  }
+
+  const telecallerId = String(lead.assigned_telecaller_id || "");
+  if (!telecallerId) {
+    console.log(`WhatsApp message for lead ${lead.id} with no assigned telecaller`);
+    return null;
+  }
+
+  const studentKey = String(lead.user_id || lead.id);
+  const conversations = await jsonTable("telecaller_conversations");
+  let conversation = conversations.find(
+    (row) =>
+      String(row.telecaller_id) === telecallerId &&
+      (String(row.student_id) === studentKey ||
+        String(row.student_id) === String(lead.id) ||
+        String(row.student_id) === String(lead.user_id || "")),
+  );
+
+  const now = new Date().toISOString();
+  if (!conversation) {
+    conversation = await jsonUpsert("telecaller_conversations", {
+      id: crypto.randomUUID(),
+      telecaller_id: telecallerId,
+      student_id: studentKey,
+      created_at: now,
+      last_message_at: now,
+    });
+  }
+
+  const created = await jsonUpsert("telecaller_messages", {
+    id: crypto.randomUUID(),
+    conversation_id: conversation.id,
+    sender_id: studentKey,
+    receiver_id: telecallerId,
+    message: text,
+    is_read: false,
+    created_at: now,
+    source: "whatsapp",
+    whatsapp_message_id: waMessageId || "",
+  });
+  await jsonUpsert("telecaller_conversations", { ...conversation, last_message_at: now });
+  await notify(
+    telecallerId,
+    "New WhatsApp message",
+    `${lead.first_name || "Lead"} ${lead.last_name || ""}: ${text.slice(0, 140)}`.trim(),
+    "info",
+    `/admin/leads/${lead.id}`,
+  );
+  return created;
+}
+
+// Meta WhatsApp Cloud API webhook — GET verifies the callback URL during setup.
+app.get("/api/whatsapp/webhook", (req, res) => {
+  const mode = String(req.query["hub.mode"] || "");
+  const token = String(req.query["hub.verify_token"] || "");
+  const challenge = String(req.query["hub.challenge"] || "");
+
+  if (mode === "subscribe" && WHATSAPP_VERIFY_TOKEN && token === WHATSAPP_VERIFY_TOKEN) {
+    return res.status(200).send(challenge);
+  }
+
+  if (!WHATSAPP_VERIFY_TOKEN) {
+    return res.status(503).json({ error: "WHATSAPP_VERIFY_TOKEN is not configured on the server." });
+  }
+
+  return res.status(403).json({ error: "Webhook verification failed." });
+});
+
+// Meta sends message/status events here after subscription is active.
+app.post("/api/whatsapp/webhook", async (req, res) => {
+  try {
+    const body = req.body || {};
+    if (body.object !== "whatsapp_business_account") {
+      return res.sendStatus(404);
+    }
+
+    for (const entry of body.entry || []) {
+      for (const change of entry.changes || []) {
+        const value = change.value || {};
+        for (const message of value.messages || []) {
+          if (message.type !== "text") continue;
+          const text = String(message.text?.body || "").trim();
+          if (!text) continue;
+          await storeIncomingWhatsAppMessage({
+            from: message.from,
+            text,
+            waMessageId: message.id,
+          });
+        }
+      }
+    }
+
+    res.sendStatus(200);
+  } catch (error) {
+    console.error("WhatsApp webhook error:", error);
+    res.sendStatus(500);
+  }
 });
 
 app.use("/api", (_req, res) => {
