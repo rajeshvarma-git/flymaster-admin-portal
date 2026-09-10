@@ -1013,8 +1013,9 @@ import {
   displayName,
   initials,
   isConvertedStudent,
-  isPortalSignup,
+  isWhatsAppLead,
   leadNeedsAssignment,
+  leadSourceLabel,
 } from "@/lib/utils";
 import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
@@ -1111,6 +1112,16 @@ export default function LeadAlerts() {
         .filter((lead) => leadNeedsAssignment(lead))
         .sort((a, b) => String(a.created_at || "").localeCompare(String(b.created_at || ""))),
     [store.leads],
+  );
+
+  const whatsappWaiting = useMemo(
+    () => waiting.filter((lead) => isWhatsAppLead(lead)),
+    [waiting],
+  );
+
+  const otherWaiting = useMemo(
+    () => waiting.filter((lead) => !isWhatsAppLead(lead)),
+    [waiting],
   );
 
   const oldestHours = waiting.length
@@ -1252,13 +1263,50 @@ export default function LeadAlerts() {
         </div>
       </Card>
 
+      {whatsappWaiting.length > 0 && (
+        <Card className="mb-4 overflow-hidden border-emerald-200">
+          <p className="border-b border-emerald-100 bg-emerald-50 px-4 py-3 text-sm font-bold text-emerald-900">
+            WhatsApp leads — assign a telecaller first ({whatsappWaiting.length})
+          </p>
+          {whatsappWaiting.map((lead) => {
+            const hours = hoursSince(lead.created_at);
+            return (
+              <div
+                key={lead.id}
+                className="flex flex-wrap items-center justify-between gap-3 border-b border-emerald-50 px-4 py-3 last:border-b-0"
+              >
+                <div className="flex min-w-0 items-center gap-3">
+                  <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-emerald-600 text-xs font-bold text-white">
+                    {initials(lead.first_name, lead.last_name, lead.email)}
+                  </span>
+                  <div className="min-w-0">
+                    <p className="font-semibold">{displayName(lead.first_name, lead.last_name, lead.email)}</p>
+                    <p className="text-xs text-slate-500">
+                      +{lead.whatsapp_number?.slice(-10) || lead.phone || "—"} · WhatsApp · waiting {ageLabel(hours)}
+                    </p>
+                  </div>
+                </div>
+                <div className="flex items-center gap-2">
+                  <Badge value="whatsapp" className="normal-case" />
+                  <Button
+                    size="sm"
+                    disabled={busy || assignMode !== "telecaller" || !telecallerId}
+                    onClick={() => void assignLead(lead)}
+                  >
+                    Assign telecaller
+                  </Button>
+                </div>
+              </div>
+            );
+          })}
+        </Card>
+      )}
+
       <Card className="overflow-hidden">
         <p className="border-b border-slate-200 px-4 py-3 font-bold">Step 2 — assign waiting leads</p>
-        {waiting.map((lead) => {
+        {(whatsappWaiting.length ? otherWaiting : waiting).map((lead) => {
           const hours = hoursSince(lead.created_at);
-          const sourceLabel = isPortalSignup(lead) || lead.user_id
-            ? "Student portal"
-            : (lead.lead_source || "manual").replace(/_/g, " ");
+          const sourceLabel = leadSourceLabel(lead);
           return (
             <div
               key={lead.id}
@@ -1277,6 +1325,7 @@ export default function LeadAlerts() {
               </div>
               <div className="flex items-center gap-2">
                 <Badge value={isConvertedStudent(lead) ? "converted" : lead.lead_status || "hot"} />
+                {isWhatsAppLead(lead) && <Badge value="whatsapp" className="normal-case" />}
                 <Button size="sm" disabled={busy || !selectedAssignee} onClick={() => void assignLead(lead)}>
                   Assign {assignMode}
                 </Button>

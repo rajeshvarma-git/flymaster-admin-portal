@@ -71,6 +71,7 @@ const styles: Record<string, string> = {
   student_site: "bg-sky-100 text-sky-800",
   unassigned: "bg-rose-100 text-rose-800",
   assigned: "bg-indigo-100 text-indigo-800",
+  whatsapp: "bg-emerald-100 text-emerald-800",
 };
 
 export function Badge({

@@ -8509,21 +8509,23 @@ app.patch("/api/leads/:id", auth, async (req, res) => {
   const updated = await applyLeadPatch(req.params.id, patch);
   await syncOwnershipOnAssignment(current, updated);
   if (patch.assigned_telecaller_id) {
+    const waNote = updated.lead_source === "whatsapp" ? " Reply on WhatsApp from your telecaller inbox." : "";
     await notify(
       patch.assigned_telecaller_id,
-      "Student assigned",
-      `${updated.first_name || "A student"} was assigned to you with full history.`,
+      updated.lead_source === "whatsapp" ? "WhatsApp lead assigned" : "Lead assigned",
+      `${updated.first_name || "A lead"} was assigned to you.${waNote}`,
       "info",
-      "/telecaller",
+      `/admin/telecallers/${patch.assigned_telecaller_id}`,
     );
   }
   if (patch.assigned_counselor_id) {
+    const waNote = updated.lead_source === "whatsapp" || updated.whatsapp_number ? " WhatsApp thread included." : "";
     await notify(
       patch.assigned_counselor_id,
-      "Student assigned",
-      `${updated.first_name || "A student"} was assigned to you with full history.`,
+      updated.entity_type === "student" || updated.lead_status === "converted" ? "Student assigned" : "Lead assigned",
+      `${updated.first_name || "A lead"} was assigned to you.${waNote}`,
       "info",
-      "/counselor/students",
+      `/admin/counselors/${patch.assigned_counselor_id}`,
     );
   }
   res.json({ ok: true, lead: updated });
@@ -8546,13 +8548,43 @@ app.post("/api/counselor/leads/:id/convert", counselorAuth, async (req, res) => 
     }
 
     const stamp = new Date().toISOString();
+    const before = { ...lead };
     const updated = await applyLeadPatch(req.params.id, {
       lead_status: "converted",
       lead_stage: "converted",
       entity_type: "student",
       conversion_date: stamp,
-      status: "assigned",
+      status: lead.assigned_counselor_id ? "assigned" : "unassigned",
     });
+
+    await syncOwnershipOnAssignment(before, updated);
+    await whatsapp.syncConversationForLead(updated);
+
+    if (updated.assigned_telecaller_id) {
+      await notify(
+        updated.assigned_telecaller_id,
+        "Lead converted to student",
+        `${updated.first_name || "Lead"} is now a student. Counselor takes over WhatsApp when assigned.`,
+        "info",
+        `/admin/students/${updated.id}`,
+      );
+    }
+
+    if (updated.assigned_counselor_id) {
+      await notify(
+        updated.assigned_counselor_id,
+        "Student ready on WhatsApp",
+        `${updated.first_name || "Student"} was converted. You can reply on WhatsApp from your counselor portal.`,
+        "info",
+        `/admin/counselors/${updated.assigned_counselor_id}`,
+      );
+    } else {
+      await notifyAdmins(
+        "Converted student needs counselor",
+        `${updated.first_name || "Student"} was converted from WhatsApp. Assign a counselor on Lead alerts.`,
+        "/admin/alerts",
+      );
+    }
 
     res.json({ ok: true, lead: updated });
   } catch (error) {
@@ -9206,14 +9238,17 @@ app.post("/api/whatsapp/webhook", async (req, res) => {
     for (const entry of body.entry || []) {
       for (const change of entry.changes || []) {
         const value = change.value || {};
+        const contacts = value.contacts || [];
         for (const message of value.messages || []) {
           if (message.type !== "text") continue;
           const text = String(message.text?.body || "").trim();
           if (!text) continue;
+          const contact = contacts.find((row) => String(row.wa_id || "") === String(message.from || ""));
           await whatsapp.storeInboundMessage({
             from: message.from,
             text,
             waMessageId: message.id,
+            profileName: contact?.profile?.name || "",
           });
         }
       }

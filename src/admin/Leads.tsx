@@ -450,7 +450,7 @@ import { useEffect, useMemo, useState } from "react";
 import { Flame, Mail, Phone, PhoneCall, Shield } from "lucide-react";
 import { useSearchParams } from "react-router-dom";
 import { useAdminStore } from "@/lib/store";
-import { counselorLabel, displayName, formatWhen, isConvertedStudent, telecallerLabel } from "@/lib/utils";
+import { counselorLabel, displayName, formatWhen, isConvertedStudent, isWhatsAppLead, leadSourceLabel, telecallerLabel } from "@/lib/utils";
 import { Badge } from "@/components/ui/Badge";
 import { Card } from "@/components/ui/Card";
 import { Input, Select } from "@/components/ui/Field";
@@ -603,10 +603,11 @@ export default function Leads() {
                     </>
                   )}
                   {" · "}
-                  source {lead.lead_source.replace(/_/g, " ")}
+                  source {leadSourceLabel(lead)}
                 </p>
               </div>
               <div className="flex items-center gap-2">
+                {isWhatsAppLead(lead) && <Badge value="whatsapp" className="normal-case" />}
                 <Badge value={lead.lead_status || "warm"} />
               </div>
             </div>

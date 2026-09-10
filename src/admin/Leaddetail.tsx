@@ -9,16 +9,19 @@ import {
   formatWhen,
   initials,
   isConvertedStudent,
+  isWhatsAppLead,
   studentOwns,
   telecallerLabel,
 } from "@/lib/utils";
 import { Badge } from "@/components/ui/Badge";
 import { Card } from "@/components/ui/Card";
 
-type Tab = "overview" | "telecaller";
+type Tab = "overview" | "telecaller" | "whatsapp";
 
 function parseTab(value: string | null): Tab {
-  return value === "telecaller" ? "telecaller" : "overview";
+  if (value === "telecaller") return "telecaller";
+  if (value === "whatsapp") return "whatsapp";
+  return "overview";
 }
 
 function parseCalls(notes?: string | null) {
@@ -90,6 +93,21 @@ export default function LeadDetail() {
       .sort((a, b) => String(a.created_at || "").localeCompare(String(b.created_at || "")));
   }, [lead, store.telecallerConversations, store.telecallerMessages]);
 
+  const whatsappConversation = useMemo(
+    () => store.whatsappConversations.find((row) => String(row.lead_id) === String(lead?.id)) || null,
+    [lead?.id, store.whatsappConversations],
+  );
+
+  const whatsappMessages = useMemo(
+    () =>
+      whatsappConversation
+        ? store.whatsappMessages
+            .filter((msg) => msg.conversation_id === whatsappConversation.id)
+            .sort((a, b) => String(a.created_at || "").localeCompare(String(b.created_at || "")))
+        : [],
+    [store.whatsappMessages, whatsappConversation],
+  );
+
   if (!lead) {
     return (
       <div>
@@ -110,6 +128,7 @@ export default function LeadDetail() {
   const tabs: Array<{ key: Tab; label: string; count: number | null; icon: typeof User }> = [
     { key: "overview", label: "Overview", count: null, icon: User },
     { key: "telecaller", label: "Telecaller chat", count: telecallerMessages.length, icon: MessageCircle },
+    { key: "whatsapp", label: "WhatsApp", count: whatsappMessages.length, icon: MessageCircle },
   ];
 
   return (
@@ -127,9 +146,10 @@ export default function LeadDetail() {
             <div className="flex flex-wrap items-center gap-3">
               <h1 className="text-2xl font-bold">{displayName(lead.first_name, lead.last_name, lead.email)}</h1>
               <Badge value={lead.lead_status || "warm"} />
+              {isWhatsAppLead(lead) && <Badge value="whatsapp" className="normal-case" />}
             </div>
             <p className="mt-1 text-sm text-slate-600">
-              {lead.email} · {lead.phone || "No phone"}
+              {lead.email} · {lead.phone || lead.whatsapp_number?.slice(-10) || "No phone"}
             </p>
             <p className="mt-3 text-xs text-slate-400">
               {(lead.preferred_countries || []).join(", ") || "No country"} · {lead.field_of_interest || "No field"} ·{" "}
@@ -252,6 +272,51 @@ export default function LeadDetail() {
               </div>
               <p className="border-t border-slate-200 bg-white p-3 text-xs text-slate-500">
                 Admin view is read-only. The telecaller replies from the telecaller portal.
+              </p>
+            </Card>
+          ))}
+
+        {tab === "whatsapp" &&
+          (whatsappMessages.length === 0 ? (
+            <Card className="p-8 text-center text-sm text-slate-500">
+              {isWhatsAppLead(lead)
+                ? "No WhatsApp messages yet."
+                : "This lead has not contacted Fly Masters on WhatsApp yet."}
+            </Card>
+          ) : (
+            <Card className="flex max-h-[62vh] flex-col overflow-hidden">
+              <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-200 p-4">
+                <p className="text-sm font-semibold">
+                  WhatsApp · {telecallerLabel(store.telecallers, lead.assigned_telecaller_id)}
+                </p>
+                <span className="text-xs text-slate-500">
+                  +{whatsappConversation?.phone_number?.slice(-10) || lead.phone}
+                </span>
+              </div>
+              <div className="flex flex-1 flex-col gap-3 overflow-y-auto bg-slate-50 p-4">
+                {whatsappMessages.map((msg) => {
+                  const outbound = msg.direction === "outbound";
+                  return (
+                    <div
+                      key={msg.id}
+                      className={`max-w-[76%] rounded-2xl px-3.5 py-2.5 text-sm ${
+                        outbound
+                          ? "self-end rounded-br-sm bg-emerald-600 text-white"
+                          : "self-start rounded-bl-sm border border-slate-200 bg-white"
+                      }`}
+                    >
+                      <p>{msg.body}</p>
+                      {msg.created_at && (
+                        <p className={`mt-1 text-[11px] ${outbound ? "text-emerald-100" : "text-slate-400"}`}>
+                          {format(new Date(msg.created_at), "PP p")}
+                        </p>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+              <p className="border-t border-slate-200 bg-white p-3 text-xs text-slate-500">
+                Admin view is read-only. The assigned telecaller replies on WhatsApp from their inbox.
               </p>
             </Card>
           ))}

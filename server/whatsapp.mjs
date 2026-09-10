@@ -58,7 +58,7 @@ export function createWhatsAppService(deps) {
   }
 
   async function findLeadForUser(userId) {
-    const leads = await jsonTable("student_leads");
+    const leads = await allLeads();
     return (
       leads.find(
         (row) =>
@@ -66,6 +66,56 @@ export function createWhatsAppService(deps) {
           String(row.id) === String(userId),
       ) || null
     );
+  }
+
+  async function createLeadFromWhatsApp({ phone, profileName, firstMessage }) {
+    const phoneNumber = normalizePhone(phone);
+    const id = crypto.randomUUID();
+    const now = new Date().toISOString();
+    const nameParts = String(profileName || "").trim().split(/\s+/).filter(Boolean);
+    const first_name = nameParts[0] || "WhatsApp";
+    const last_name = nameParts.slice(1).join(" ") || "Lead";
+    const localPhone = phoneNumber.slice(-10);
+    const email = `whatsapp+${localPhone}@lead.flymasters.local`;
+
+    const lead = {
+      id,
+      user_id: id,
+      email,
+      phone: localPhone,
+      whatsapp_number: phoneNumber,
+      whatsapp_verified: true,
+      whatsapp_verified_at: now,
+      first_name,
+      last_name,
+      preferred_countries: [],
+      field_of_interest: "",
+      academic_score: "",
+      lead_status: "hot",
+      lead_stage: "hot",
+      lead_source: "whatsapp",
+      entity_type: "lead",
+      status: "new",
+      priority: "high",
+      notes: firstMessage ? `[WhatsApp first message] ${firstMessage.slice(0, 500)}` : "",
+      created_at: now,
+    };
+
+    if (pool) {
+      await pool
+        .query(
+          `INSERT INTO student_leads (
+            id, user_id, email, phone, first_name, last_name, lead_status, lead_stage,
+            lead_source, entity_type, status, created_at
+          ) VALUES ($1,$2,$3,$4,$5,$6,'hot','hot','whatsapp','lead','new',$7)
+          ON CONFLICT (id) DO NOTHING`,
+          [id, id, email, localPhone, first_name, last_name, now],
+        )
+        .catch(() => {});
+    }
+
+    await jsonUpsert("student_leads", lead);
+    return lead;
   }
 
   function resolveStaffForLead(lead) {
@@ -142,11 +192,14 @@ export function createWhatsAppService(deps) {
     return updated;
   }
 
-  async function storeInboundMessage({ from, text, waMessageId }) {
-    const lead = await findLeadByPhone(from);
+  async function storeInboundMessage({ from, text, waMessageId, profileName }) {
+    let lead = await findLeadByPhone(from);
+    let isNewLead = false;
+
     if (!lead) {
-      console.log(`WhatsApp message from unknown number ${from}: ${text.slice(0, 80)}`);
-      return null;
+      lead = await createLeadFromWhatsApp({ phone: from, profileName, firstMessage: text });
+      isNewLead = true;
+      console.log(`WhatsApp lead created from ${from}: ${lead.id}`);
     }
 
     const phoneNumber = normalizePhone(from);
@@ -154,6 +207,7 @@ export function createWhatsAppService(deps) {
       ...lead,
       whatsapp_number: phoneNumber,
       phone: lead.phone || phoneNumber.slice(-10),
+      lead_source: lead.lead_source || "whatsapp",
     };
     await jsonUpsert("student_leads", freshLead);
 
@@ -177,17 +231,23 @@ export function createWhatsAppService(deps) {
 
     await jsonUpsert("whatsapp_conversations", { ...conversation, last_message_at: now });
 
-    if (staff?.staffId && notify) {
+    if (isNewLead && notifyAdmins) {
+      await notifyAdmins(
+        "New WhatsApp lead",
+        `${name} (+${phoneNumber.slice(-10)}) messaged on WhatsApp. Assign a telecaller from Lead alerts.`,
+        "/admin/alerts",
+      );
+    } else if (staff?.staffId && notify) {
       await notify(staff.staffId, "New WhatsApp message", `${name}: ${text.slice(0, 140)}`, "info", path);
     } else if (notifyAdmins) {
       await notifyAdmins(
         "WhatsApp needs assignment",
         `${name} messaged on WhatsApp but has no assigned ${isConvertedLead(freshLead) ? "counselor" : "telecaller"}.`,
-        path,
+        "/admin/alerts",
       );
     }
 
-    return created;
+    return { message: created, isNewLead, lead: freshLead };
   }
 
   async function storeOutboundMessage({ conversationId, body, staffId, waMessageId }) {
@@ -414,6 +474,7 @@ export function createWhatsAppService(deps) {
     phonesMatch,
     findLeadByPhone,
     findLeadForUser,
+    createLeadFromWhatsApp,
     resolveStaffForLead,
     getOrCreateConversation,
     syncConversationForLead,

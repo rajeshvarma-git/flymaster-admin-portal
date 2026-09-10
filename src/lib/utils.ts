@@ -117,6 +117,16 @@ export function isPortalSignup(lead: { lead_source?: string }) {
   return PORTAL_SOURCES.has(String(lead.lead_source || ""));
 }
 
+export function isWhatsAppLead(lead: { lead_source?: string; whatsapp_number?: string }) {
+  return lead.lead_source === "whatsapp" || Boolean(lead.whatsapp_number);
+}
+
+export function leadSourceLabel(lead: { lead_source?: string; user_id?: string }) {
+  if (isPortalSignup(lead) || lead.user_id) return "Student portal";
+  if (lead.lead_source === "whatsapp") return "WhatsApp";
+  return (lead.lead_source || "manual").replace(/_/g, " ");
+}
+
 export function personName(
   people: Array<{ user_id?: string; id?: string; first_name?: string; last_name?: string; email?: string }>,
   id?: string | null,
