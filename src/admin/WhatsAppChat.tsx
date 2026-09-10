@@ -194,9 +194,14 @@ export default function WhatsAppChat() {
                   );
                 })}
               </div>
-              {canReply && (
-                <div className="border-t border-slate-100 p-4">
-                  {error && <p className="mb-2 text-sm text-rose-600">{error}</p>}
+              <div className="border-t border-slate-100 p-4">
+                {isAdmin && (
+                  <p className="mb-2 text-xs text-slate-500">
+                    Admin view is read-only. The assigned telecaller or counselor sends replies.
+                  </p>
+                )}
+                {error && <p className="mb-2 text-sm text-rose-600">{error}</p>}
+                {canReply ? (
                   <div className="flex gap-2">
                     <input
                       className="flex-1 rounded-xl border border-slate-200 px-3 py-2 text-sm outline-none focus:border-emerald-500"
@@ -214,8 +219,16 @@ export default function WhatsAppChat() {
                       Send
                     </Button>
                   </div>
-                </div>
-              )}
+                ) : (
+                  assignUrl && (
+                    <Link to={assignUrl}>
+                      <Button variant="secondary" size="sm">
+                        Open profile to assign staff
+                      </Button>
+                    </Link>
+                  )
+                )}
+              </div>
             </>
           )}
         </Card>

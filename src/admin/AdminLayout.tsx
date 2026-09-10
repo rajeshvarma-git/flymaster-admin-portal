@@ -523,8 +523,6 @@ import {
   LayoutDashboard,
   LogOut,
   Menu,
-  MessageCircle,
-  MessagesSquare,
   Plane,
   Phone,
   PhoneCall,
@@ -555,14 +553,6 @@ const groups = [
       { to: "/admin/telecallers", label: "Telecallers", icon: Phone, end: false },
       { to: "/admin/students", label: "Students", icon: GraduationCap, end: false },
       { to: "/admin/counselors", label: "Counselors", icon: Shield, end: false },
-    ],
-  },
-  {
-    title: "Operations",
-    items: [
-      { to: "/admin/chat", label: "Student Chat", icon: MessageCircle, end: false },
-      { to: "/admin/whatsapp", label: "WhatsApp", icon: MessageCircle, end: false },
-      { to: "/admin/ai-chat", label: "AI Chat", icon: MessagesSquare, end: false },
     ],
   },
   {
