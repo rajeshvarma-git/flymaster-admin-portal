@@ -295,14 +295,7 @@ export default function LeadDetail() {
               </div>
               <div className="flex flex-1 flex-col gap-3 overflow-y-auto bg-slate-50 p-4">
                 {whatsappMessages.map((msg) => {
-                  const system = msg.kind === "system" || msg.staff_id === "system";
-                  if (system) {
-                    return (
-                      <p key={msg.id} className="self-center text-center text-[11px] text-slate-500">
-                        {msg.body}
-                      </p>
-                    );
-                  }
+                  if (msg.kind === "system" || msg.staff_id === "system") return null;
                   const outbound = msg.direction === "outbound";
                   return (
                     <div

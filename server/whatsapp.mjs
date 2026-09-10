@@ -161,28 +161,6 @@ export function createWhatsAppService(deps) {
     return Date.now() - new Date(last.created_at).getTime() < 24 * 3600 * 1000;
   }
 
-  function seatChangeLabel(prevRole, nextRole) {
-    if (prevRole === "telecaller" && nextRole === "counselor") {
-      return "Telecaller left this chat. Counselor has joined.";
-    }
-    if (prevRole === "telecaller" && !nextRole) {
-      return "Telecaller left this chat. Waiting for a counselor to be assigned.";
-    }
-    if (prevRole === "counselor" && nextRole === "telecaller") {
-      return "Counselor left this chat. Telecaller has joined.";
-    }
-    if (!prevRole && nextRole === "telecaller") return "A telecaller joined this chat.";
-    if (!prevRole && nextRole === "counselor") return "A counselor joined this chat.";
-    if (prevRole && nextRole && prevRole !== nextRole) {
-      return `${prevRole} left this chat. ${nextRole} has joined.`;
-    }
-    if (prevRole && nextRole && prevRole === nextRole) {
-      return `This chat was reassigned to another ${nextRole}.`;
-    }
-    if (prevRole && !nextRole) return `${prevRole} left this chat.`;
-    return "";
-  }
-
   async function recordSeatChange(conversation, nextStaff, reason) {
     const prevId = String(conversation.assigned_staff_id || "");
     const prevRole = String(conversation.staff_role || "");
@@ -209,21 +187,6 @@ export function createWhatsAppService(deps) {
         started_at: now,
         ended_at: null,
         reason: inferred,
-      });
-    }
-
-    const body = seatChangeLabel(prevRole, nextRole);
-    if (body) {
-      await jsonUpsert("whatsapp_messages", {
-        id: crypto.randomUUID(),
-        conversation_id: conversation.id,
-        direction: "outbound",
-        kind: "system",
-        body,
-        wa_message_id: "",
-        staff_id: "system",
-        is_read: true,
-        created_at: now,
       });
     }
   }

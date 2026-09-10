@@ -176,15 +176,7 @@ export default function WhatsAppChat() {
                   <p className="text-sm text-slate-500">No messages in this thread yet.</p>
                 )}
                 {messages.map((item) => {
-                  const system = item.kind === "system" || item.staff_id === "system";
-                  if (system) {
-                    return (
-                      <p key={item.id} className="mb-3 text-center text-[11px] text-slate-500">
-                        {item.body}
-                        {item.created_at ? ` · ${format(new Date(item.created_at), "PP p")}` : ""}
-                      </p>
-                    );
-                  }
+                  if (item.kind === "system" || item.staff_id === "system") return null;
                   const outbound = item.direction === "outbound";
                   const knownTelecaller = store.telecallers.some((row) => row.id === item.staff_id);
                   const sender =
