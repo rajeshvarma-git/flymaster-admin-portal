@@ -38,10 +38,22 @@ function isConvertedLead(lead) {
 }
 
 export function createWhatsAppService(deps) {
-  const { jsonTable, jsonUpsert, config, notify } = deps;
+  const { jsonTable, jsonUpsert, config, notify, pool, notifyAdmins } = deps;
+
+  async function allLeads() {
+    const jsonLeads = await jsonTable("student_leads");
+    if (!pool) return jsonLeads;
+    const sql = await pool.query("SELECT * FROM student_leads").catch(() => ({ rows: [] }));
+    const byId = new Map(jsonLeads.map((row) => [String(row.id), row]));
+    for (const row of sql.rows) {
+      const id = String(row.id);
+      byId.set(id, { ...row, ...byId.get(id), id });
+    }
+    return [...byId.values()];
+  }
 
   async function findLeadByPhone(phone) {
-    const leads = await jsonTable("student_leads");
+    const leads = await allLeads();
     return leads.find((row) => phonesMatch(row.phone, phone) || phonesMatch(row.whatsapp_number, phone)) || null;
   }
 
@@ -68,6 +80,19 @@ export function createWhatsAppService(deps) {
     return { staffId, staffRole: "telecaller" };
   }
 
+  async function syncConversationStaff(conversation, lead) {
+    const staff = resolveStaffForLead(lead);
+    const phoneNumber = normalizePhone(conversation.phone_number || lead.whatsapp_number || lead.phone);
+    return jsonUpsert("whatsapp_conversations", {
+      ...conversation,
+      lead_id: String(lead.id),
+      user_id: lead.user_id ? String(lead.user_id) : conversation.user_id || "",
+      phone_number: phoneNumber,
+      assigned_staff_id: staff?.staffId || "",
+      staff_role: staff?.staffRole || "",
+    });
+  }
+
   async function getOrCreateConversation(lead, phone) {
     const phoneNumber = normalizePhone(phone || lead.whatsapp_number || lead.phone);
     const staff = resolveStaffForLead(lead);
@@ -77,7 +102,9 @@ export function createWhatsAppService(deps) {
         String(row.lead_id) === String(lead.id) ||
         phonesMatch(row.phone_number, phoneNumber),
     );
-    if (existing) return existing;
+    if (existing) {
+      return syncConversationStaff(existing, lead);
+    }
 
     const now = new Date().toISOString();
     return jsonUpsert("whatsapp_conversations", {
@@ -92,6 +119,29 @@ export function createWhatsAppService(deps) {
     });
   }
 
+  async function syncConversationForLead(lead) {
+    const conversations = await jsonTable("whatsapp_conversations");
+    const phoneNumber = normalizePhone(lead.whatsapp_number || lead.phone);
+    const matches = conversations.filter(
+      (row) =>
+        String(row.lead_id) === String(lead.id) ||
+        phonesMatch(row.phone_number, phoneNumber),
+    );
+    for (const conv of matches) {
+      await syncConversationStaff(conv, lead);
+    }
+    return matches.length;
+  }
+
+  async function syncAllConversationStaff() {
+    const leads = await allLeads();
+    let updated = 0;
+    for (const lead of leads) {
+      updated += await syncConversationForLead(lead);
+    }
+    return updated;
+  }
+
   async function storeInboundMessage({ from, text, waMessageId }) {
     const lead = await findLeadByPhone(from);
     if (!lead) {
@@ -99,9 +149,20 @@ export function createWhatsAppService(deps) {
       return null;
     }
 
-    const conversation = await getOrCreateConversation(lead, from);
-    const staff = resolveStaffForLead(lead);
+    const phoneNumber = normalizePhone(from);
+    const freshLead = {
+      ...lead,
+      whatsapp_number: phoneNumber,
+      phone: lead.phone || phoneNumber.slice(-10),
+    };
+    await jsonUpsert("student_leads", freshLead);
+
+    let conversation = await getOrCreateConversation(freshLead, from);
+    conversation = await syncConversationStaff(conversation, freshLead);
+    const staff = resolveStaffForLead(freshLead);
     const now = new Date().toISOString();
+    const name = `${freshLead.first_name || "Lead"} ${freshLead.last_name || ""}`.trim() || phoneNumber.slice(-10);
+    const path = isConvertedLead(freshLead) ? `/admin/students/${freshLead.id}` : `/admin/leads/${freshLead.id}`;
 
     const created = await jsonUpsert("whatsapp_messages", {
       id: crypto.randomUUID(),
@@ -117,9 +178,13 @@ export function createWhatsAppService(deps) {
     await jsonUpsert("whatsapp_conversations", { ...conversation, last_message_at: now });
 
     if (staff?.staffId && notify) {
-      const name = `${lead.first_name || "Lead"} ${lead.last_name || ""}`.trim();
-      const path = isConvertedLead(lead) ? `/admin/students/${lead.id}` : `/admin/leads/${lead.id}`;
       await notify(staff.staffId, "New WhatsApp message", `${name}: ${text.slice(0, 140)}`, "info", path);
+    } else if (notifyAdmins) {
+      await notifyAdmins(
+        "WhatsApp needs assignment",
+        `${name} messaged on WhatsApp but has no assigned ${isConvertedLead(freshLead) ? "counselor" : "telecaller"}.`,
+        path,
+      );
     }
 
     return created;
@@ -315,9 +380,15 @@ export function createWhatsAppService(deps) {
     };
   }
 
-  function staffCanAccessConversation(conversation, user, counselors) {
+  function staffCanViewConversation(conversation, user, counselors) {
     const role = user.role;
     if (role === "admin" || role === "super_admin") return true;
+    return staffCanReplyConversation(conversation, user, counselors);
+  }
+
+  function staffCanReplyConversation(conversation, user, counselors) {
+    const role = user.role;
+    if (role === "admin" || role === "super_admin") return false;
     if (role === "telecaller") {
       return String(conversation.assigned_staff_id) === String(user.id) && conversation.staff_role === "telecaller";
     }
@@ -335,7 +406,7 @@ export function createWhatsAppService(deps) {
 
   async function filterConversationsForStaff(user, counselors) {
     const conversations = await jsonTable("whatsapp_conversations");
-    return conversations.filter((row) => staffCanAccessConversation(row, user, counselors));
+    return conversations.filter((row) => staffCanViewConversation(row, user, counselors));
   }
 
   return {
@@ -345,13 +416,16 @@ export function createWhatsAppService(deps) {
     findLeadForUser,
     resolveStaffForLead,
     getOrCreateConversation,
+    syncConversationForLead,
+    syncAllConversationStaff,
     storeInboundMessage,
     storeOutboundMessage,
     sendTextMessage,
     sendOtp,
     verifyOtp,
     getVerificationStatus,
-    staffCanAccessConversation,
+    staffCanViewConversation,
+    staffCanReplyConversation,
     filterConversationsForStaff,
   };
 }

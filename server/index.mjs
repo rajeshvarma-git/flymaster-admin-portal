@@ -7413,6 +7413,7 @@ async function syncOwnershipOnAssignment(before, after) {
   if (telecallerChanged && after.assigned_telecaller_id) {
     await transferTelecallerOwnership(after, after.assigned_telecaller_id);
   }
+  await whatsapp.syncConversationForLead(after);
 }
 
 function counselorKeyIds(counselor) {
@@ -7807,10 +7808,19 @@ async function notify(userId, title, message, type = "info", actionUrl = "") {
   }
 }
 
+async function notifyAdmins(title, message, actionUrl = "") {
+  const users = await loadUsers();
+  for (const user of users.filter((row) => ADMIN_ROLES.includes(row.role))) {
+    await notify(user.id, title, message, "info", actionUrl);
+  }
+}
+
 const whatsapp = createWhatsAppService({
   jsonTable,
   jsonUpsert,
   notify,
+  pool,
+  notifyAdmins,
   config: {
     accessToken: WHATSAPP_ACCESS_TOKEN,
     phoneNumberId: WHATSAPP_PHONE_NUMBER_ID,
@@ -9087,7 +9097,7 @@ app.get("/api/whatsapp/conversations/:id/messages", staffChatAuth, async (req, r
     const conversations = await jsonTable("whatsapp_conversations");
     const conversation = conversations.find((row) => String(row.id) === String(req.params.id));
     if (!conversation) return res.status(404).json({ error: "Conversation not found." });
-    if (!whatsapp.staffCanAccessConversation(conversation, req.user, counselors)) {
+    if (!whatsapp.staffCanViewConversation(conversation, req.user, counselors)) {
       return res.status(403).json({ error: "You cannot view this conversation." });
     }
     const messages = (await jsonTable("whatsapp_messages"))
@@ -9111,8 +9121,13 @@ app.post("/api/whatsapp/messages", staffChatAuth, async (req, res) => {
     const conversations = await jsonTable("whatsapp_conversations");
     const conversation = conversations.find((row) => String(row.id) === conversationId);
     if (!conversation) return res.status(404).json({ error: "Conversation not found." });
-    if (!whatsapp.staffCanAccessConversation(conversation, req.user, counselors)) {
-      return res.status(403).json({ error: "You cannot reply in this conversation." });
+    if (!whatsapp.staffCanReplyConversation(conversation, req.user, counselors)) {
+      const unassigned = !conversation.assigned_staff_id;
+      return res.status(403).json({
+        error: unassigned
+          ? "No telecaller or counselor is assigned yet. Assign staff from the lead profile — admins monitor only."
+          : "Only the assigned telecaller or counselor can reply on WhatsApp.",
+      });
     }
 
     const waMessageId = await whatsapp.sendTextMessage(conversation.phone_number, body);
@@ -9134,7 +9149,7 @@ app.post("/api/whatsapp/conversations/:id/read", staffChatAuth, async (req, res)
     const conversations = await jsonTable("whatsapp_conversations");
     const conversation = conversations.find((row) => String(row.id) === String(req.params.id));
     if (!conversation) return res.status(404).json({ error: "Conversation not found." });
-    if (!whatsapp.staffCanAccessConversation(conversation, req.user, counselors)) {
+    if (!whatsapp.staffCanViewConversation(conversation, req.user, counselors)) {
       return res.status(403).json({ error: "You cannot update this conversation." });
     }
 
@@ -9151,6 +9166,15 @@ app.post("/api/whatsapp/conversations/:id/read", staffChatAuth, async (req, res)
     res.json({ ok: true, count: unread.length });
   } catch (error) {
     res.status(500).json({ error: error.message || "Could not mark messages read" });
+  }
+});
+
+app.post("/api/whatsapp/sync-staff", auth, async (_req, res) => {
+  try {
+    const count = await whatsapp.syncAllConversationStaff();
+    res.json({ ok: true, count });
+  } catch (error) {
+    res.status(500).json({ error: error.message || "Could not sync WhatsApp assignments" });
   }
 });
 
@@ -9476,6 +9500,8 @@ async function start() {
   try {
     await applySchema();
     await ensureAdminUser();
+    const synced = await whatsapp.syncAllConversationStaff();
+    if (synced) console.log(`[whatsapp] synced staff on ${synced} conversation(s)`);
     startUnassignedWatcher();
   } catch (error) {
     console.error(error);
