@@ -122,8 +122,8 @@ export function isWhatsAppLead(lead: { lead_source?: string; whatsapp_number?: s
 }
 
 export function leadSourceLabel(lead: { lead_source?: string; user_id?: string }) {
-  if (isPortalSignup(lead) || lead.user_id) return "Student portal";
   if (lead.lead_source === "whatsapp") return "WhatsApp";
+  if (isPortalSignup(lead) || lead.user_id) return "Student portal";
   return (lead.lead_source || "manual").replace(/_/g, " ");
 }
 

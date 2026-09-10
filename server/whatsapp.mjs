@@ -47,14 +47,37 @@ export function createWhatsAppService(deps) {
     const byId = new Map(jsonLeads.map((row) => [String(row.id), row]));
     for (const row of sql.rows) {
       const id = String(row.id);
-      byId.set(id, { ...row, ...byId.get(id), id });
+      const json = byId.get(id) || {};
+      byId.set(id, {
+        ...row,
+        ...json,
+        id,
+        phone: json.phone || row.phone || "",
+        whatsapp_number: json.whatsapp_number || row.whatsapp_number || "",
+        assigned_telecaller_id: json.assigned_telecaller_id || row.assigned_telecaller_id || null,
+        assigned_counselor_id: json.assigned_counselor_id || row.assigned_counselor_id || null,
+      });
     }
     return [...byId.values()];
   }
 
+  function leadPhoneMatches(lead, phone) {
+    return phonesMatch(lead?.phone, phone) || phonesMatch(lead?.whatsapp_number, phone);
+  }
+
+  function pickBestLeadForPhone(matches) {
+    if (!matches.length) return null;
+    const openAssigned = matches.find(
+      (row) => !isConvertedLead(row) && (row.assigned_telecaller_id || row.assigned_counselor_id),
+    );
+    if (openAssigned) return openAssigned;
+    const convertedAssigned = matches.find((row) => isConvertedLead(row) && row.assigned_counselor_id);
+    return convertedAssigned || matches[0];
+  }
+
   async function findLeadByPhone(phone) {
     const leads = await allLeads();
-    return leads.find((row) => phonesMatch(row.phone, phone) || phonesMatch(row.whatsapp_number, phone)) || null;
+    return pickBestLeadForPhone(leads.filter((row) => leadPhoneMatches(row, phone)));
   }
 
   async function findLeadForUser(userId) {
@@ -80,7 +103,7 @@ export function createWhatsAppService(deps) {
 
     const lead = {
       id,
-      user_id: id,
+      user_id: null,
       email,
       phone: localPhone,
       whatsapp_number: phoneNumber,
@@ -95,7 +118,9 @@ export function createWhatsAppService(deps) {
       lead_stage: "hot",
       lead_source: "whatsapp",
       entity_type: "lead",
-      status: "new",
+      status: "unassigned",
+      assigned_telecaller_id: null,
+      assigned_counselor_id: null,
       priority: "high",
       notes: firstMessage ? `[WhatsApp first message] ${firstMessage.slice(0, 500)}` : "",
       created_at: now,
@@ -107,15 +132,100 @@ export function createWhatsAppService(deps) {
           `INSERT INTO student_leads (
             id, user_id, email, phone, first_name, last_name, lead_status, lead_stage,
             lead_source, entity_type, status, created_at
-          ) VALUES ($1,$2,$3,$4,$5,$6,'hot','hot','whatsapp','lead','new',$7)
+          ) VALUES ($1,NULL,$2,$3,$4,$5,'hot','hot','whatsapp','lead','unassigned',$6)
           ON CONFLICT (id) DO NOTHING`,
-          [id, id, email, localPhone, first_name, last_name, now],
+          [id, email, localPhone, first_name, last_name, now],
         )
         .catch(() => {});
     }
 
     await jsonUpsert("student_leads", lead);
     return lead;
+  }
+
+  function isSystemMessage(row) {
+    return row?.kind === "system" || String(row?.staff_id || "") === "system";
+  }
+
+  function isCustomerCareWindowOpen(messages, conversationId) {
+    const inbound = (messages || [])
+      .filter(
+        (row) =>
+          String(row.conversation_id) === String(conversationId) &&
+          row.direction === "inbound" &&
+          !isSystemMessage(row),
+      )
+      .sort((a, b) => String(a.created_at || "").localeCompare(String(b.created_at || "")));
+    const last = inbound[inbound.length - 1];
+    if (!last?.created_at) return false;
+    return Date.now() - new Date(last.created_at).getTime() < 24 * 3600 * 1000;
+  }
+
+  function seatChangeLabel(prevRole, nextRole) {
+    if (prevRole === "telecaller" && nextRole === "counselor") {
+      return "Telecaller left this chat. Counselor has joined.";
+    }
+    if (prevRole === "telecaller" && !nextRole) {
+      return "Telecaller left this chat. Waiting for a counselor to be assigned.";
+    }
+    if (prevRole === "counselor" && nextRole === "telecaller") {
+      return "Counselor left this chat. Telecaller has joined.";
+    }
+    if (!prevRole && nextRole === "telecaller") return "A telecaller joined this chat.";
+    if (!prevRole && nextRole === "counselor") return "A counselor joined this chat.";
+    if (prevRole && nextRole && prevRole !== nextRole) {
+      return `${prevRole} left this chat. ${nextRole} has joined.`;
+    }
+    if (prevRole && nextRole && prevRole === nextRole) {
+      return `This chat was reassigned to another ${nextRole}.`;
+    }
+    if (prevRole && !nextRole) return `${prevRole} left this chat.`;
+    return "";
+  }
+
+  async function recordSeatChange(conversation, nextStaff, reason) {
+    const prevId = String(conversation.assigned_staff_id || "");
+    const prevRole = String(conversation.staff_role || "");
+    const nextId = String(nextStaff?.staffId || "");
+    const nextRole = String(nextStaff?.staffRole || "");
+    if (prevId === nextId && prevRole === nextRole) return;
+
+    const now = new Date().toISOString();
+    const inferred = reason || (nextId ? (prevId ? "reassigned" : "assigned") : "unassigned");
+    const seats = await jsonTable("whatsapp_seat_history");
+    const open = seats.filter(
+      (row) => String(row.conversation_id) === String(conversation.id) && !row.ended_at,
+    );
+    for (const seat of open) {
+      await jsonUpsert("whatsapp_seat_history", { ...seat, ended_at: now, end_reason: inferred });
+    }
+    if (nextId) {
+      await jsonUpsert("whatsapp_seat_history", {
+        id: crypto.randomUUID(),
+        conversation_id: conversation.id,
+        lead_id: conversation.lead_id || "",
+        staff_id: nextId,
+        staff_role: nextRole,
+        started_at: now,
+        ended_at: null,
+        reason: inferred,
+      });
+    }
+
+    const body = seatChangeLabel(prevRole, nextRole);
+    if (body) {
+      await jsonUpsert("whatsapp_messages", {
+        id: crypto.randomUUID(),
+        conversation_id: conversation.id,
+        direction: "outbound",
+        kind: "system",
+        body,
+        wa_message_id: "",
+        staff_id: "system",
+        is_read: true,
+        created_at: now,
+      });
+    }
   }
 
   function resolveStaffForLead(lead) {
@@ -130,9 +240,13 @@ export function createWhatsAppService(deps) {
     return { staffId, staffRole: "telecaller" };
   }
 
-  async function syncConversationStaff(conversation, lead) {
+  async function syncConversationStaff(conversation, lead, reason) {
     const staff = resolveStaffForLead(lead);
     const phoneNumber = normalizePhone(conversation.phone_number || lead.whatsapp_number || lead.phone);
+    const inferred =
+      reason ||
+      (isConvertedLead(lead) && (!staff || staff.staffRole === "counselor") ? "converted" : undefined);
+    await recordSeatChange(conversation, staff, inferred);
     return jsonUpsert("whatsapp_conversations", {
       ...conversation,
       lead_id: String(lead.id),
@@ -145,7 +259,6 @@ export function createWhatsAppService(deps) {
 
   async function getOrCreateConversation(lead, phone) {
     const phoneNumber = normalizePhone(phone || lead.whatsapp_number || lead.phone);
-    const staff = resolveStaffForLead(lead);
     const conversations = await jsonTable("whatsapp_conversations");
     const existing = conversations.find(
       (row) =>
@@ -157,42 +270,80 @@ export function createWhatsAppService(deps) {
     }
 
     const now = new Date().toISOString();
-    return jsonUpsert("whatsapp_conversations", {
+    const created = await jsonUpsert("whatsapp_conversations", {
       id: crypto.randomUUID(),
       lead_id: String(lead.id),
       user_id: lead.user_id ? String(lead.user_id) : "",
       phone_number: phoneNumber,
-      assigned_staff_id: staff?.staffId || "",
-      staff_role: staff?.staffRole || "",
+      assigned_staff_id: "",
+      staff_role: "",
       last_message_at: now,
       created_at: now,
     });
+    return syncConversationStaff(created, lead);
   }
 
   async function syncConversationForLead(lead) {
+    if (!lead) return 0;
     const conversations = await jsonTable("whatsapp_conversations");
     const phoneNumber = normalizePhone(lead.whatsapp_number || lead.phone);
     const matches = conversations.filter(
       (row) =>
         String(row.lead_id) === String(lead.id) ||
-        phonesMatch(row.phone_number, phoneNumber),
+        (phoneNumber && phonesMatch(row.phone_number, phoneNumber)),
     );
+    if (!matches.length) {
+      if (!phoneNumber) return 0;
+      await getOrCreateConversation(lead, phoneNumber);
+      return 1;
+    }
     for (const conv of matches) {
-      await syncConversationStaff(conv, lead);
+      await syncConversationStaff({ ...conv, lead_id: String(lead.id) }, lead);
     }
     return matches.length;
   }
 
-  async function syncAllConversationStaff() {
-    const leads = await allLeads();
+  async function syncConversationsForLeads(leads) {
     let updated = 0;
-    for (const lead of leads) {
+    for (const lead of leads || []) {
       updated += await syncConversationForLead(lead);
     }
     return updated;
   }
 
+  async function syncAllConversationStaff() {
+    const leads = await allLeads();
+    return syncConversationsForLeads(leads);
+  }
+
+  function conversationOwnedByTelecaller(conversation, user, leads) {
+    const userId = String(user?.id || "");
+    if (!userId) return false;
+    if (
+      String(conversation.assigned_staff_id) === userId &&
+      conversation.staff_role !== "counselor"
+    ) {
+      const lead = (leads || []).find((row) => String(row.id) === String(conversation.lead_id));
+      if (lead && isConvertedLead(lead)) return false;
+      return true;
+    }
+    return (leads || []).some((lead) => {
+      if (isConvertedLead(lead)) return false;
+      if (String(lead.assigned_telecaller_id || "") !== userId) return false;
+      return (
+        String(lead.id) === String(conversation.lead_id) ||
+        leadPhoneMatches(lead, conversation.phone_number)
+      );
+    });
+  }
+
   async function storeInboundMessage({ from, text, waMessageId, profileName }) {
+    if (waMessageId) {
+      const existingMessages = await jsonTable("whatsapp_messages");
+      const duplicate = existingMessages.find((row) => String(row.wa_message_id || "") === String(waMessageId));
+      if (duplicate) return { message: duplicate, isNewLead: false, lead: null, duplicate: true };
+    }
+
     let lead = await findLeadByPhone(from);
     let isNewLead = false;
 
@@ -238,7 +389,13 @@ export function createWhatsAppService(deps) {
         "/admin/alerts",
       );
     } else if (staff?.staffId && notify) {
-      await notify(staff.staffId, "New WhatsApp message", `${name}: ${text.slice(0, 140)}`, "info", path);
+      await notify(
+        staff.staffId,
+        "New WhatsApp message",
+        `${name}: ${text.slice(0, 140)}`,
+        "info",
+        staff.staffRole === "telecaller" ? `/whatsapp?lead=${freshLead.id}` : path,
+      );
     } else if (notifyAdmins) {
       await notifyAdmins(
         "WhatsApp needs assignment",
@@ -286,12 +443,16 @@ export function createWhatsAppService(deps) {
           template: {
             name: templateName,
             language: { code: "en" },
-            components: [
-              {
-                type: "body",
-                parameters: (templateParams || []).map((value) => ({ type: "text", text: String(value) })),
-              },
-            ],
+            ...((templateParams || []).length
+              ? {
+                  components: [
+                    {
+                      type: "body",
+                      parameters: templateParams.map((value) => ({ type: "text", text: String(value) })),
+                    },
+                  ],
+                }
+              : {}),
           },
         }
       : {
@@ -312,13 +473,74 @@ export function createWhatsAppService(deps) {
 
     const data = await res.json().catch(() => ({}));
     if (!res.ok) {
-      throw new Error(data?.error?.message || "WhatsApp send failed");
+      const error = new Error(data?.error?.message || "WhatsApp send failed");
+      error.status = res.status >= 400 && res.status < 500 ? 400 : 502;
+      error.code = data?.error?.code;
+      throw error;
     }
     return data?.messages?.[0]?.id || "";
   }
 
   async function sendTextMessage(to, text) {
     return sendViaMeta({ to, text });
+  }
+
+  function isOutsideWindowError(error) {
+    const code = Number(error?.code);
+    const message = String(error?.message || "");
+    return code === 131047 || /24 hour|#131047|re-engag|not in the allowed window/i.test(message);
+  }
+
+  async function sendLeadMessage({ lead, staffId, text }) {
+    const body = String(text || "").trim();
+    if (!body) {
+      throw Object.assign(new Error("Message cannot be empty."), { status: 400 });
+    }
+    const phone = normalizePhone(lead.whatsapp_number || lead.phone);
+    if (phone.length < 12) {
+      throw Object.assign(new Error("This lead needs a valid 10-digit WhatsApp number before you can send."), { status: 400 });
+    }
+
+    const freshLead = {
+      ...lead,
+      whatsapp_number: phone,
+      phone: lead.phone || phone.slice(-10),
+    };
+    await jsonUpsert("student_leads", freshLead);
+    const conversation = await getOrCreateConversation(freshLead, phone);
+
+    let waMessageId = "";
+    let usedTemplate = false;
+    try {
+      waMessageId = await sendTextMessage(phone, body);
+    } catch (error) {
+      const templateName = config.outreachTemplateName;
+      if (isOutsideWindowError(error) && templateName) {
+        waMessageId = await sendViaMeta({
+          to: phone,
+          templateName,
+          templateParams: [freshLead.first_name || "there", body].filter(Boolean).slice(0, 2),
+        });
+        usedTemplate = true;
+      } else if (isOutsideWindowError(error)) {
+        throw Object.assign(
+          new Error(
+            "WhatsApp only allows a free message for 24 hours after the lead writes first. Wait for their reply, or ask admin to set WHATSAPP_OUTREACH_TEMPLATE_NAME.",
+          ),
+          { status: 400 },
+        );
+      } else {
+        throw Object.assign(error, { status: error.status || 400 });
+      }
+    }
+
+    const created = await storeOutboundMessage({
+      conversationId: conversation.id,
+      body,
+      staffId,
+      waMessageId,
+    });
+    return { message: created, conversation, usedTemplate };
   }
 
   async function sendOtpMessage(to, code) {
@@ -440,17 +662,17 @@ export function createWhatsAppService(deps) {
     };
   }
 
-  function staffCanViewConversation(conversation, user, counselors) {
+  function staffCanViewConversation(conversation, user, counselors, leads = []) {
     const role = user.role;
     if (role === "admin" || role === "super_admin") return true;
-    return staffCanReplyConversation(conversation, user, counselors);
+    return staffCanReplyConversation(conversation, user, counselors, leads);
   }
 
-  function staffCanReplyConversation(conversation, user, counselors) {
+  function staffCanReplyConversation(conversation, user, counselors, leads = []) {
     const role = user.role;
     if (role === "admin" || role === "super_admin") return false;
     if (role === "telecaller") {
-      return String(conversation.assigned_staff_id) === String(user.id) && conversation.staff_role === "telecaller";
+      return conversationOwnedByTelecaller(conversation, user, leads);
     }
     if (role === "counselor") {
       const counselor = counselors.find(
@@ -459,14 +681,22 @@ export function createWhatsAppService(deps) {
       const counselorIds = new Set(
         [counselor?.id, counselor?.auth_user_id, user.id].filter(Boolean).map(String),
       );
-      return counselorIds.has(String(conversation.assigned_staff_id)) && conversation.staff_role === "counselor";
+      if (counselorIds.has(String(conversation.assigned_staff_id)) && conversation.staff_role === "counselor") {
+        return true;
+      }
+      return (leads || []).some(
+        (lead) =>
+          isConvertedLead(lead) &&
+          counselorIds.has(String(lead.assigned_counselor_id || "")) &&
+          (String(lead.id) === String(conversation.lead_id) || leadPhoneMatches(lead, conversation.phone_number)),
+      );
     }
     return false;
   }
 
-  async function filterConversationsForStaff(user, counselors) {
+  async function filterConversationsForStaff(user, counselors, leads = []) {
     const conversations = await jsonTable("whatsapp_conversations");
-    return conversations.filter((row) => staffCanViewConversation(row, user, counselors));
+    return conversations.filter((row) => staffCanViewConversation(row, user, counselors, leads));
   }
 
   return {
@@ -478,10 +708,14 @@ export function createWhatsAppService(deps) {
     resolveStaffForLead,
     getOrCreateConversation,
     syncConversationForLead,
+    syncConversationsForLeads,
     syncAllConversationStaff,
     storeInboundMessage,
     storeOutboundMessage,
+    isCustomerCareWindowOpen,
+    isSystemMessage,
     sendTextMessage,
+    sendLeadMessage,
     sendOtp,
     verifyOtp,
     getVerificationStatus,

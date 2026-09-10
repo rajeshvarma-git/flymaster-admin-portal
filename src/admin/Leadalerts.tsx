@@ -1115,13 +1115,13 @@ export default function LeadAlerts() {
   );
 
   const whatsappWaiting = useMemo(
-    () => waiting.filter((lead) => isWhatsAppLead(lead)),
+    () => waiting.filter((lead) => isWhatsAppLead(lead) && !isConvertedStudent(lead)),
     [waiting],
   );
 
   const otherWaiting = useMemo(
-    () => waiting.filter((lead) => !isWhatsAppLead(lead)),
-    [waiting],
+    () => waiting.filter((lead) => !whatsappWaiting.some((row) => row.id === lead.id)),
+    [waiting, whatsappWaiting],
   );
 
   const oldestHours = waiting.length

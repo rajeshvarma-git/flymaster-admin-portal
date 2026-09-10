@@ -156,6 +156,7 @@ export interface WhatsAppMessageRow {
   id: string;
   conversation_id: string;
   direction: "inbound" | "outbound";
+  kind?: "system" | "";
   body: string;
   wa_message_id?: string;
   staff_id?: string;

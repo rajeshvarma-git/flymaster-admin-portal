@@ -176,7 +176,25 @@ export default function WhatsAppChat() {
                   <p className="text-sm text-slate-500">No messages in this thread yet.</p>
                 )}
                 {messages.map((item) => {
+                  const system = item.kind === "system" || item.staff_id === "system";
+                  if (system) {
+                    return (
+                      <p key={item.id} className="mb-3 text-center text-[11px] text-slate-500">
+                        {item.body}
+                        {item.created_at ? ` · ${format(new Date(item.created_at), "PP p")}` : ""}
+                      </p>
+                    );
+                  }
                   const outbound = item.direction === "outbound";
+                  const knownTelecaller = store.telecallers.some((row) => row.id === item.staff_id);
+                  const sender =
+                    outbound && item.staff_id
+                      ? item.staff_id === user?.id
+                        ? "You"
+                        : knownTelecaller
+                          ? telecallerLabel(store.telecallers, item.staff_id)
+                          : counselorLabel(store.counselors, item.staff_id)
+                      : "";
                   return (
                     <div
                       key={item.id}
@@ -184,6 +202,9 @@ export default function WhatsAppChat() {
                         outbound ? "ml-auto bg-emerald-600 text-white" : "bg-slate-100 text-slate-900"
                       }`}
                     >
+                      {sender && outbound && (
+                        <p className="mb-0.5 text-[10px] font-semibold text-emerald-100">{sender}</p>
+                      )}
                       <p>{item.body}</p>
                       {item.created_at && (
                         <p className={`mt-1 text-[10px] ${outbound ? "text-emerald-100" : "text-slate-400"}`}>
