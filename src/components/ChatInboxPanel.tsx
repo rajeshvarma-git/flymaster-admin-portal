@@ -1,3 +1,4 @@
+import type { ReactNode } from "react";
 import { format } from "date-fns";
 import { Link } from "react-router-dom";
 import { Card } from "@/components/ui/Card";
@@ -38,8 +39,10 @@ interface ChatInboxPanelProps {
   emptyThreadMessage?: string;
   footerNote?: string;
   profileHref?: string;
+  profileLabel?: string;
   headerNote?: string;
-  variant?: "sky" | "emerald";
+  headerExtra?: ReactNode;
+  variant?: "sky" | "emerald" | "counselor";
 }
 
 export default function ChatInboxPanel({
@@ -51,14 +54,22 @@ export default function ChatInboxPanel({
   emptyThreadMessage = "No messages in this thread yet.",
   footerNote,
   profileHref,
+  profileLabel = "View profile",
   headerNote,
+  headerExtra,
   variant = "sky",
 }: ChatInboxPanelProps) {
   const activeId = selectedId && threads.some((row) => row.id === selectedId) ? selectedId : threads[0]?.id || null;
   const active = threads.find((row) => row.id === activeId) || null;
   const messages = activeId ? getMessages(activeId) : [];
-  const activeClass = variant === "emerald" ? "bg-emerald-50" : "bg-sky-50";
-  const outboundClass = variant === "emerald" ? "bg-emerald-600 text-white" : "bg-sky-600 text-white";
+  const activeClass =
+    variant === "emerald" ? "bg-emerald-50" : "bg-sky-50";
+  const outboundClass =
+    variant === "counselor"
+      ? "bg-navy-900 text-white"
+      : variant === "emerald"
+        ? "bg-emerald-600 text-white"
+        : "bg-sky-600 text-white";
 
   if (threads.length === 0) {
     return <Card className="p-8 text-center text-sm text-slate-500">{emptyListMessage}</Card>;
@@ -101,11 +112,14 @@ export default function ChatInboxPanel({
                 <p className="font-semibold">{active.title}</p>
                 {active.subtitle && <p className="text-xs text-slate-500">{active.subtitle}</p>}
               </div>
-              {profileHref && (
-                <Link to={profileHref} className="text-xs font-semibold text-sky-600 hover:underline">
-                  View profile
-                </Link>
-              )}
+              <div className="flex flex-wrap items-center gap-2">
+                {headerExtra}
+                {profileHref && (
+                  <Link to={profileHref} className="text-xs font-semibold text-sky-600 hover:underline">
+                    {profileLabel}
+                  </Link>
+                )}
+              </div>
             </div>
 
             <div className="flex flex-1 flex-col gap-3 overflow-y-auto bg-slate-50 p-4">

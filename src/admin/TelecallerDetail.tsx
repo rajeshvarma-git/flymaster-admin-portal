@@ -6,7 +6,7 @@ import { counselorLabel, displayName, initials, isConvertedStudent, studentOwns 
 import { Badge } from "@/components/ui/Badge";
 import { Card } from "@/components/ui/Card";
 import ChatInboxPanel, { type InboxMessage, type InboxThread } from "@/components/ChatInboxPanel";
-import WhatsAppThreads from "@/components/WhatsAppThreads";
+import WhatsAppThreads, { whatsAppThreadIdForLead } from "@/components/WhatsAppThreads";
 import type { Lead } from "@/lib/types";
 
 const STALE_DAYS = 2;
@@ -149,6 +149,11 @@ export default function TelecallerDetail() {
     const wa = whatsappConversations.find((row) => String(row.lead_id) === String(lead.id));
     if (wa) {
       setSelectedWhatsAppId(wa.id);
+      setTab("whatsapp");
+      return;
+    }
+    if (lead.phone) {
+      setSelectedWhatsAppId(whatsAppThreadIdForLead(lead.id));
       setTab("whatsapp");
       return;
     }
@@ -365,10 +370,11 @@ export default function TelecallerDetail() {
             conversations={whatsappConversations}
             messages={store.whatsappMessages}
             leads={store.leads}
-            profileUrl={(lead, conv) =>
-              leadDetailUrl(lead?.id || conv.lead_id, "overview", telecaller.id)
+            people={mine}
+            profileUrl={(lead) =>
+              lead ? leadDetailUrl(lead.id, "overview", telecaller.id) : "#"
             }
-            emptyMessage="No WhatsApp conversations yet. Messages appear when a lead replies on WhatsApp."
+            emptyMessage="No assigned leads yet."
             selectedId={selectedWhatsAppId}
             onSelectId={setSelectedWhatsAppId}
           />

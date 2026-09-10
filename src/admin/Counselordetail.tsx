@@ -10,8 +10,8 @@ import { Button } from "@/components/ui/Button";
 import { Card } from "@/components/ui/Card";
 import { Select } from "@/components/ui/Field";
 import ChatInboxPanel, { type InboxMessage, type InboxThread } from "@/components/ChatInboxPanel";
-import WhatsAppThreads from "@/components/WhatsAppThreads";
-import type { DocumentRow, Lead, WhatsAppConversationRow } from "@/lib/types";
+import WhatsAppThreads, { whatsAppThreadIdForLead } from "@/components/WhatsAppThreads";
+import type { DocumentRow, Lead } from "@/lib/types";
 
 const SILENT_DAYS = 7;
 type Tab = "students" | "leads" | "conversations" | "lead_chats" | "whatsapp" | "calls" | "documents";
@@ -214,21 +214,49 @@ export default function CounselorDetail() {
 
   const openStudent = students.find((row) => row.id === openStudentId) || students[0] || null;
 
-  const openPersonChat = (person: Lead) => {
+  const openPersonChat = (person: Lead, preferInApp = false) => {
     const wa = whatsappConversations.find((row) => String(row.lead_id) === String(person.id));
     if (wa) {
       setOpenWhatsAppId(wa.id);
       setTab("whatsapp");
       return;
     }
-    if (isConvertedStudent(person)) {
-      setOpenStudentId(person.id);
-      setTab("conversations");
+    if (preferInApp || !person.phone) {
+      if (isConvertedStudent(person)) {
+        setOpenStudentId(person.id);
+        setTab("conversations");
+        return;
+      }
+      const chat = leadChatThreads.find((row) => row.lead?.id === person.id);
+      setOpenLeadChatId(chat?.conv.id || null);
+      setTab("lead_chats");
       return;
     }
-    const chat = leadChatThreads.find((row) => row.lead?.id === person.id);
-    setOpenLeadChatId(chat?.conv.id || null);
-    setTab("lead_chats");
+    setOpenWhatsAppId(whatsAppThreadIdForLead(person.id));
+    setTab("whatsapp");
+  };
+
+  const studentChatThreads: InboxThread[] = students.map((student) => {
+    const all = messagesFor(student);
+    const last = all[all.length - 1];
+    return {
+      id: student.id,
+      title: displayName(student.first_name, student.last_name, student.email),
+      subtitle: `${student.preferred_countries?.join(", ") || "No country"} · ${student.field_of_interest || "No field"}`,
+      preview: last?.message || "No messages yet",
+      lastAt: last?.created_at || null,
+    };
+  });
+
+  const getStudentChatMessages = (studentId: string): InboxMessage[] => {
+    const student = students.find((row) => row.id === studentId);
+    if (!student) return [];
+    return messagesFor(student).map((msg) => ({
+      id: msg.id,
+      text: msg.message,
+      outbound: !studentOwns(student, msg.sender_id),
+      createdAt: msg.created_at,
+    }));
   };
 
   const leadChatInboxThreads: InboxThread[] = leadChatThreads.map(({ conv, lead, msgs }) => ({
@@ -668,10 +696,9 @@ export default function CounselorDetail() {
             conversations={whatsappConversations}
             messages={store.whatsappMessages}
             leads={store.leads}
-            profileUrl={(lead, conv: WhatsAppConversationRow) =>
-              lead ? profileUrl(lead, counselor.id) : `/admin/students/${conv.lead_id}`
-            }
-            emptyMessage="No WhatsApp conversations yet. Messages appear when a student replies on WhatsApp."
+            people={assigned}
+            profileUrl={(lead) => (lead ? profileUrl(lead, counselor.id) : "#")}
+            emptyMessage="No assigned students or leads yet."
             selectedId={openWhatsAppId}
             onSelectId={setOpenWhatsAppId}
           />
@@ -691,81 +718,22 @@ export default function CounselorDetail() {
         )}
 
         {tab === "conversations" && (
-          students.length === 0 ? (
-            <Card className="p-8 text-center text-sm text-slate-500">No students, so no conversations yet.</Card>
-          ) : (
-            <div className="grid gap-4 lg:grid-cols-[260px_1fr]">
-              <Card className="max-h-[62vh] overflow-y-auto p-2">
-                {students.map((student) => {
-                  const all = messagesFor(student);
-                  const last = all[all.length - 1];
-                  const active = openStudent?.id === student.id;
-                  return (
-                    <button
-                      key={student.id}
-                      onClick={() => setOpenStudentId(student.id)}
-                      className={`w-full rounded-xl px-3 py-2.5 text-left ${active ? "bg-sky-50" : "hover:bg-slate-50"}`}
-                    >
-                      <p className="text-sm font-semibold">
-                        {displayName(student.first_name, student.last_name, student.email)}
-                      </p>
-                      <p className="truncate text-xs text-slate-500">{last ? last.message : "No messages yet"}</p>
-                      {last?.created_at && <p className="text-[11px] text-slate-400">{whenLabel(last.created_at)}</p>}
-                    </button>
-                  );
-                })}
-              </Card>
-
-              <Card className="flex max-h-[62vh] flex-col overflow-hidden">
-                {openStudent && (
-                  <>
-                    <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-200 p-4">
-                      <div>
-                        <p className="font-semibold">
-                          {displayName(openStudent.first_name, openStudent.last_name, openStudent.email)}
-                        </p>
-                        <p className="text-xs text-slate-500">
-                          {openStudent.preferred_countries?.join(", ") || "No country"} ·{" "}
-                          {openStudent.field_of_interest || "No field"}
-                        </p>
-                      </div>
-                      <Badge value={`${docProgress(docsFor(openStudent))}% documents`} className="normal-case" />
-                    </div>
-
-                    <div className="flex flex-1 flex-col gap-3 overflow-y-auto bg-slate-50 p-4">
-                      {messagesFor(openStudent).length === 0 && (
-                        <p className="py-10 text-center text-sm text-slate-500">No messages exchanged yet.</p>
-                      )}
-                      {messagesFor(openStudent).map((msg) => {
-                        const fromStudent = studentOwns(openStudent, msg.sender_id);
-                        return (
-                          <div
-                            key={msg.id}
-                            className={`max-w-[76%] rounded-2xl px-3.5 py-2.5 text-sm ${
-                              fromStudent
-                                ? "self-start rounded-bl-sm border border-slate-200 bg-white"
-                                : "self-end rounded-br-sm bg-navy-900 text-white"
-                            }`}
-                          >
-                            <p>{msg.message}</p>
-                            {msg.created_at && (
-                              <p className={`mt-1 text-[11px] ${fromStudent ? "text-slate-400" : "text-white/60"}`}>
-                                {format(new Date(msg.created_at), "PP p")}
-                              </p>
-                            )}
-                          </div>
-                        );
-                      })}
-                    </div>
-
-                    <p className="border-t border-slate-200 bg-white p-3 text-xs text-slate-500">
-                      Admin view is read-only. The counselor replies from the counselor portal.
-                    </p>
-                  </>
-                )}
-              </Card>
-            </div>
-          )
+          <ChatInboxPanel
+            threads={studentChatThreads}
+            getMessages={getStudentChatMessages}
+            selectedId={openStudent?.id || openStudentId}
+            onSelect={setOpenStudentId}
+            emptyListMessage="No students, so no conversations yet."
+            emptyThreadMessage="No messages exchanged yet."
+            footerNote="Admin view is read-only. The counselor replies from the counselor portal."
+            profileHref={openStudent ? `/admin/students/${openStudent.id}` : undefined}
+            headerExtra={
+              openStudent ? (
+                <Badge value={`${docProgress(docsFor(openStudent))}% documents`} className="normal-case" />
+              ) : undefined
+            }
+            variant="counselor"
+          />
         )}
 
         {tab === "documents" && (
