@@ -7050,7 +7050,8 @@ function asApplication(row) {
 
 async function applySchema() {
   const sql = readFileSync(path.join(__dirname, "schema.sql"), "utf8");
-  const statements = sql
+  const withoutComments = sql.replace(/--[^\n\r]*/g, "");
+  const statements = withoutComments
     .split(";")
     .map((item) => item.trim())
     .filter((item) => item.length > 0);
