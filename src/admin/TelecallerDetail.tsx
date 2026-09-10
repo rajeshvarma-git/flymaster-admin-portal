@@ -6,10 +6,11 @@ import { useAdminStore } from "@/lib/store";
 import { counselorLabel, displayName, initials, isConvertedStudent, studentOwns } from "@/lib/utils";
 import { Badge } from "@/components/ui/Badge";
 import { Card } from "@/components/ui/Card";
+import WhatsAppThreads from "@/components/WhatsAppThreads";
 import type { Lead } from "@/lib/types";
 
 const STALE_DAYS = 2;
-type Tab = "open" | "converted" | "calls" | "chats";
+type Tab = "open" | "converted" | "calls" | "chats" | "whatsapp";
 type LeadDetailTab = "overview" | "telecaller";
 
 function leadDetailUrl(leadId: string, detailTab: LeadDetailTab, telecallerId: string) {
@@ -127,6 +128,21 @@ export default function TelecallerDetail() {
 
   const chatCount = chatThreads.reduce((sum, row) => sum + row.msgs.length, 0);
 
+  const whatsappConversations = useMemo(() => {
+    if (!telecaller) return [];
+    return store.whatsappConversations.filter(
+      (row) => String(row.assigned_staff_id) === telecaller.id && row.staff_role === "telecaller",
+    );
+  }, [telecaller, store.whatsappConversations]);
+
+  const whatsappCount = useMemo(
+    () =>
+      store.whatsappMessages.filter((msg) =>
+        whatsappConversations.some((conv) => conv.id === msg.conversation_id),
+      ).length,
+    [store.whatsappMessages, whatsappConversations],
+  );
+
   if (!telecaller) {
     return (
       <div>
@@ -142,6 +158,7 @@ export default function TelecallerDetail() {
     { key: "open", label: "Open leads", count: open.length, icon: PhoneCall },
     { key: "converted", label: "Converted students", count: converted.length, icon: CheckCircle2 },
     { key: "chats", label: "Lead chats", count: chatCount, icon: MessageCircle },
+    { key: "whatsapp", label: "WhatsApp", count: whatsappCount, icon: MessageCircle },
     { key: "calls", label: "Call history", count: calls.length, icon: MessageSquare },
   ];
 
@@ -297,6 +314,18 @@ export default function TelecallerDetail() {
               </Card>
             </>
           ))}
+
+        {tab === "whatsapp" && (
+          <WhatsAppThreads
+            conversations={whatsappConversations}
+            messages={store.whatsappMessages}
+            leads={store.leads}
+            profileUrl={(lead, conv) =>
+              leadDetailUrl(lead?.id || conv.lead_id, "overview", telecaller.id)
+            }
+            emptyMessage="No WhatsApp conversations yet. Messages appear when a lead replies on WhatsApp."
+          />
+        )}
 
         {tab === "chats" &&
           (chatThreads.length === 0 ? (

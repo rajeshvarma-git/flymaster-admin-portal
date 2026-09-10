@@ -9,10 +9,11 @@ import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
 import { Card } from "@/components/ui/Card";
 import { Select } from "@/components/ui/Field";
-import type { DocumentRow, Lead } from "@/lib/types";
+import WhatsAppThreads from "@/components/WhatsAppThreads";
+import type { DocumentRow, Lead, WhatsAppConversationRow } from "@/lib/types";
 
 const SILENT_DAYS = 7;
-type Tab = "students" | "leads" | "conversations" | "lead_chats" | "calls" | "documents";
+type Tab = "students" | "leads" | "conversations" | "lead_chats" | "whatsapp" | "calls" | "documents";
 
 interface CallEntry {
   lead: Lead;
@@ -149,6 +150,26 @@ export default function CounselorDetail() {
   }, [counselor, assigned, store.telecallerConversations, store.telecallerMessages]);
 
   const leadChatCount = leadChatThreads.reduce((sum, row) => sum + row.msgs.length, 0);
+
+  const counselorStaffIds = useMemo(() => {
+    if (!counselor) return new Set<string>();
+    return new Set([counselor.id, counselor.auth_user_id].filter(Boolean).map(String));
+  }, [counselor]);
+
+  const whatsappConversations = useMemo(() => {
+    if (!counselor) return [];
+    return store.whatsappConversations.filter(
+      (row) => row.staff_role === "counselor" && counselorStaffIds.has(String(row.assigned_staff_id)),
+    );
+  }, [counselor, counselorStaffIds, store.whatsappConversations]);
+
+  const whatsappCount = useMemo(
+    () =>
+      store.whatsappMessages.filter((msg) =>
+        whatsappConversations.some((conv) => conv.id === msg.conversation_id),
+      ).length,
+    [store.whatsappMessages, whatsappConversations],
+  );
 
   const docsFor = (student: Lead) =>
     store.documents.filter((doc) => !doc.archived && studentOwns(student, doc.user_id));
@@ -291,6 +312,7 @@ export default function CounselorDetail() {
     { key: "leads", label: "Leads", count: leads.length, icon: PhoneCall },
     { key: "conversations", label: "Student chats", count: withMessages.length, icon: MessageCircle },
     { key: "lead_chats", label: "Lead chats", count: leadChatCount, icon: MessageSquare },
+    { key: "whatsapp", label: "WhatsApp", count: whatsappCount, icon: MessageCircle },
     { key: "calls", label: "Call history", count: calls.length, icon: PhoneCall },
     { key: "documents", label: "Documents", count: allDocs.length, icon: FileText },
   ];
@@ -591,6 +613,18 @@ export default function CounselorDetail() {
               </Card>
             </>
           ))}
+
+        {tab === "whatsapp" && (
+          <WhatsAppThreads
+            conversations={whatsappConversations}
+            messages={store.whatsappMessages}
+            leads={store.leads}
+            profileUrl={(lead, conv: WhatsAppConversationRow) =>
+              lead ? profileUrl(lead, counselor.id) : `/admin/students/${conv.lead_id}`
+            }
+            emptyMessage="No WhatsApp conversations yet. Messages appear when a student replies on WhatsApp."
+          />
+        )}
 
         {tab === "lead_chats" &&
           (leadChatThreads.length === 0 ? (
