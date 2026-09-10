@@ -8151,6 +8151,27 @@ app.post("/api/telecaller/whatsapp/messages", telecallerAuth, async (req, res) =
   }
 });
 
+app.post("/api/telecaller/notifications/read", telecallerAuth, async (req, res) => {
+  try {
+    const all = Boolean(req.body.all);
+    const ids = new Set(
+      (Array.isArray(req.body.ids) ? req.body.ids : [req.body.id]).filter(Boolean).map(String),
+    );
+    const rows = await jsonTable("notifications");
+    let count = 0;
+    for (const row of rows) {
+      if (String(row.user_id) !== String(req.user.id)) continue;
+      if (row.is_read) continue;
+      if (!all && !ids.has(String(row.id))) continue;
+      await jsonUpsert("notifications", { ...row, is_read: true });
+      count += 1;
+    }
+    res.json({ ok: true, count });
+  } catch (error) {
+    res.status(500).json({ error: error.message || "Could not update notifications" });
+  }
+});
+
 app.post("/api/telecaller/conversations", telecallerAuth, async (req, res) => {
   try {
     const studentId = String(req.body.studentId || "");

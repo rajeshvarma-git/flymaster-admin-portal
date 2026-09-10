@@ -9,6 +9,7 @@ import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
 import { Card } from "@/components/ui/Card";
 import { Select } from "@/components/ui/Field";
+import ChatInboxPanel, { type InboxMessage, type InboxThread } from "@/components/ChatInboxPanel";
 import WhatsAppThreads from "@/components/WhatsAppThreads";
 import type { DocumentRow, Lead, WhatsAppConversationRow } from "@/lib/types";
 
@@ -92,6 +93,8 @@ export default function CounselorDetail() {
   const store = useAdminStore();
   const [tab, setTab] = useState<Tab>("students");
   const [openStudentId, setOpenStudentId] = useState<string | null>(null);
+  const [openLeadChatId, setOpenLeadChatId] = useState<string | null>(null);
+  const [openWhatsAppId, setOpenWhatsAppId] = useState<string | null>(null);
   const [busyDocId, setBusyDocId] = useState<string | null>(null);
   const [busyAction, setBusyAction] = useState<"transfer" | "remove" | null>(null);
   const [transferTargetId, setTransferTargetId] = useState("");
@@ -210,6 +213,46 @@ export default function CounselorDetail() {
   }
 
   const openStudent = students.find((row) => row.id === openStudentId) || students[0] || null;
+
+  const openPersonChat = (person: Lead) => {
+    const wa = whatsappConversations.find((row) => String(row.lead_id) === String(person.id));
+    if (wa) {
+      setOpenWhatsAppId(wa.id);
+      setTab("whatsapp");
+      return;
+    }
+    if (isConvertedStudent(person)) {
+      setOpenStudentId(person.id);
+      setTab("conversations");
+      return;
+    }
+    const chat = leadChatThreads.find((row) => row.lead?.id === person.id);
+    setOpenLeadChatId(chat?.conv.id || null);
+    setTab("lead_chats");
+  };
+
+  const leadChatInboxThreads: InboxThread[] = leadChatThreads.map(({ conv, lead, msgs }) => ({
+    id: conv.id,
+    title: lead ? displayName(lead.first_name, lead.last_name, lead.email) : "Unknown lead",
+    subtitle: lead
+      ? `${lead.phone || "No phone"} · Telecaller: ${telecallerLabel(store.telecallers, lead.assigned_telecaller_id)}`
+      : undefined,
+    preview: msgs[msgs.length - 1]?.message || "No messages yet",
+    lastAt: conv.last_message_at,
+  }));
+
+  const getLeadChatMessages = (threadId: string): InboxMessage[] => {
+    const row = leadChatThreads.find((item) => item.conv.id === threadId);
+    if (!row) return [];
+    return row.msgs.map((msg) => ({
+      id: msg.id,
+      text: msg.message,
+      outbound: row.lead ? !studentOwns(row.lead, msg.sender_id) : true,
+      createdAt: msg.created_at,
+    }));
+  };
+
+  const activeLeadChat = leadChatThreads.find((row) => row.conv.id === openLeadChatId) || leadChatThreads[0] || null;
 
   const decide = async (docId: string, status: "approved" | "rejected") => {
     setBusyDocId(docId);
@@ -483,10 +526,7 @@ export default function CounselorDetail() {
                       <tr
                         key={student.id}
                         className="cursor-pointer border-b border-slate-100 text-sm last:border-b-0 hover:bg-slate-50"
-                        onClick={() => {
-                          setOpenStudentId(student.id);
-                          setTab("conversations");
-                        }}
+                        onClick={() => openPersonChat(student)}
                       >
                         <td className="px-4 py-3">
                           <p className="font-semibold">
@@ -555,11 +595,12 @@ export default function CounselorDetail() {
                     key={lead.id}
                     className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 px-5 py-4 last:border-b-0"
                   >
-                    <Link
-                      to={leadDetailUrl(lead.id, counselor.id)}
-                      className="min-w-0 flex-1 transition hover:opacity-80"
+                    <button
+                      type="button"
+                      onClick={() => openPersonChat(lead)}
+                      className="min-w-0 flex-1 text-left transition hover:opacity-80"
                     >
-                      <p className="font-semibold text-sky-700">
+                      <p className="font-semibold text-sky-700 hover:underline">
                         {displayName(lead.first_name, lead.last_name, lead.email)}
                       </p>
                       <p className="text-sm text-slate-500">
@@ -568,13 +609,21 @@ export default function CounselorDetail() {
                       <p className="mt-1 text-xs text-slate-400">
                         Telecaller: {telecallerLabel(store.telecallers, lead.assigned_telecaller_id)} ·{" "}
                         {callCount} call{callCount === 1 ? "" : "s"} · {chatCount} chat message
-                        {chatCount === 1 ? "" : "s"}
+                        {chatCount === 1 ? "" : "s"} · Click to open chat
                       </p>
                       <p className={`mt-0.5 text-xs ${wait.late ? "font-semibold text-rose-600" : "text-slate-400"}`}>
                         {wait.text} · Signed up {whenLabel(lead.created_at) || "recently"}
                       </p>
-                    </Link>
-                    <Badge value={lead.lead_status || "hot"} />
+                    </button>
+                    <div className="flex items-center gap-2">
+                      <Link
+                        to={leadDetailUrl(lead.id, counselor.id)}
+                        className="text-xs font-semibold text-sky-600 hover:underline"
+                      >
+                        Profile
+                      </Link>
+                      <Badge value={lead.lead_status || "hot"} />
+                    </div>
                   </div>
                 );
               })}
@@ -623,64 +672,23 @@ export default function CounselorDetail() {
               lead ? profileUrl(lead, counselor.id) : `/admin/students/${conv.lead_id}`
             }
             emptyMessage="No WhatsApp conversations yet. Messages appear when a student replies on WhatsApp."
+            selectedId={openWhatsAppId}
+            onSelectId={setOpenWhatsAppId}
           />
         )}
 
-        {tab === "lead_chats" &&
-          (leadChatThreads.length === 0 ? (
-            <Card className="p-8 text-center text-sm text-slate-500">
-              No lead chat conversations yet. Messages appear when a telecaller chats with assigned leads.
-            </Card>
-          ) : (
-            <div className="space-y-4">
-              {leadChatThreads.map(({ conv, lead, msgs }) => (
-                <Card key={conv.id} className="overflow-hidden">
-                  <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-200 px-4 py-3">
-                    <Link
-                      to={lead ? profileUrl(lead, counselor.id) : "#"}
-                      className="min-w-0 transition hover:opacity-80"
-                    >
-                      <p className="text-sm font-semibold text-sky-700 hover:underline">
-                        {lead ? displayName(lead.first_name, lead.last_name, lead.email) : "Unknown lead"}
-                      </p>
-                      <p className="text-xs text-slate-500">
-                        {msgs.length} message{msgs.length === 1 ? "" : "s"}
-                        {conv.last_message_at ? ` · Last ${whenLabel(conv.last_message_at)}` : ""}
-                        {lead ? ` · Telecaller: ${telecallerLabel(store.telecallers, lead.assigned_telecaller_id)}` : ""}
-                      </p>
-                    </Link>
-                    {lead && (
-                      <Link to={profileUrl(lead, counselor.id)} className="text-xs font-semibold text-sky-600 hover:underline">
-                        View lead profile
-                      </Link>
-                    )}
-                  </div>
-                  <div className="flex max-h-64 flex-col gap-2 overflow-y-auto bg-slate-50 p-4">
-                    {msgs.map((msg) => {
-                      const fromStudent = lead ? studentOwns(lead, msg.sender_id) : false;
-                      return (
-                        <div
-                          key={msg.id}
-                          className={`max-w-[80%] rounded-2xl px-3 py-2 text-sm ${
-                            fromStudent
-                              ? "self-start rounded-bl-sm border border-slate-200 bg-white"
-                              : "self-end rounded-br-sm bg-sky-600 text-white"
-                          }`}
-                        >
-                          <p>{msg.message}</p>
-                          {msg.created_at && (
-                            <p className={`mt-1 text-[10px] ${fromStudent ? "text-slate-400" : "text-white/60"}`}>
-                              {format(new Date(msg.created_at), "PP p")}
-                            </p>
-                          )}
-                        </div>
-                      );
-                    })}
-                  </div>
-                </Card>
-              ))}
-            </div>
-          ))}
+        {tab === "lead_chats" && (
+          <ChatInboxPanel
+            threads={leadChatInboxThreads}
+            getMessages={getLeadChatMessages}
+            selectedId={openLeadChatId}
+            onSelect={setOpenLeadChatId}
+            emptyListMessage="No lead chat conversations yet. Messages appear when a telecaller chats with assigned leads."
+            footerNote="Admin view is read-only. Telecallers and counselors reply from their portals."
+            headerNote="Click a lead name on the left to open their chat thread."
+            profileHref={activeLeadChat?.lead ? profileUrl(activeLeadChat.lead, counselor.id) : undefined}
+          />
+        )}
 
         {tab === "conversations" && (
           students.length === 0 ? (

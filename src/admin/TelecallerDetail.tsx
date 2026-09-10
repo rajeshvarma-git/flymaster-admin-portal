@@ -1,11 +1,11 @@
 import { useMemo, useState } from "react";
 import { Link, useParams } from "react-router-dom";
-import { format } from "date-fns";
 import { ArrowLeft, CheckCircle2, MessageCircle, MessageSquare, PhoneCall } from "lucide-react";
 import { useAdminStore } from "@/lib/store";
 import { counselorLabel, displayName, initials, isConvertedStudent, studentOwns } from "@/lib/utils";
 import { Badge } from "@/components/ui/Badge";
 import { Card } from "@/components/ui/Card";
+import ChatInboxPanel, { type InboxMessage, type InboxThread } from "@/components/ChatInboxPanel";
 import WhatsAppThreads from "@/components/WhatsAppThreads";
 import type { Lead } from "@/lib/types";
 
@@ -85,6 +85,8 @@ export default function TelecallerDetail() {
   const { id = "" } = useParams();
   const store = useAdminStore();
   const [tab, setTab] = useState<Tab>("open");
+  const [selectedChatId, setSelectedChatId] = useState<string | null>(null);
+  const [selectedWhatsAppId, setSelectedWhatsAppId] = useState<string | null>(null);
 
   const telecaller = store.telecallers.find((row) => row.id === id) || null;
 
@@ -142,6 +144,39 @@ export default function TelecallerDetail() {
       ).length,
     [store.whatsappMessages, whatsappConversations],
   );
+
+  const openLeadChat = (lead: Lead) => {
+    const wa = whatsappConversations.find((row) => String(row.lead_id) === String(lead.id));
+    if (wa) {
+      setSelectedWhatsAppId(wa.id);
+      setTab("whatsapp");
+      return;
+    }
+    const chat = chatThreads.find((row) => row.lead?.id === lead.id);
+    setSelectedChatId(chat?.conv.id || null);
+    setTab("chats");
+  };
+
+  const chatInboxThreads: InboxThread[] = chatThreads.map(({ conv, lead, msgs }) => ({
+    id: conv.id,
+    title: lead ? displayName(lead.first_name, lead.last_name, lead.email) : "Unknown lead",
+    subtitle: lead?.phone || undefined,
+    preview: msgs[msgs.length - 1]?.message || "No messages yet",
+    lastAt: conv.last_message_at,
+  }));
+
+  const getChatMessages = (threadId: string): InboxMessage[] => {
+    const row = chatThreads.find((item) => item.conv.id === threadId);
+    if (!row) return [];
+    return row.msgs.map((msg) => ({
+      id: msg.id,
+      text: msg.message,
+      outbound: row.lead ? !studentOwns(row.lead, msg.sender_id) : true,
+      createdAt: msg.created_at,
+    }));
+  };
+
+  const activeChatThread = chatThreads.find((row) => row.conv.id === selectedChatId) || chatThreads[0] || null;
 
   if (!telecaller) {
     return (
@@ -228,9 +263,10 @@ export default function TelecallerDetail() {
                     key={lead.id}
                     className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 px-5 py-4 last:border-b-0"
                   >
-                    <Link
-                      to={leadDetailUrl(lead.id, "overview", telecaller.id)}
-                      className="min-w-0 flex-1 transition hover:opacity-80"
+                    <button
+                      type="button"
+                      onClick={() => openLeadChat(lead)}
+                      className="min-w-0 flex-1 text-left transition hover:opacity-80"
                     >
                       <p className="font-semibold text-sky-700 hover:underline">
                         {displayName(lead.first_name, lead.last_name, lead.email)}
@@ -240,9 +276,18 @@ export default function TelecallerDetail() {
                       </p>
                       <p className={`mt-1 text-xs ${wait.late ? "font-semibold text-rose-600" : "text-slate-400"}`}>
                         {wait.text} · {parseCalls(lead).length} call{parseCalls(lead).length === 1 ? "" : "s"} logged
+                        · Click to open chat
                       </p>
-                    </Link>
-                    <Badge value={lead.lead_status || "warm"} />
+                    </button>
+                    <div className="flex items-center gap-2">
+                      <Link
+                        to={leadDetailUrl(lead.id, "overview", telecaller.id)}
+                        className="text-xs font-semibold text-sky-600 hover:underline"
+                      >
+                        Profile
+                      </Link>
+                      <Badge value={lead.lead_status || "warm"} />
+                    </div>
                   </div>
                 );
               })}
@@ -324,64 +369,27 @@ export default function TelecallerDetail() {
               leadDetailUrl(lead?.id || conv.lead_id, "overview", telecaller.id)
             }
             emptyMessage="No WhatsApp conversations yet. Messages appear when a lead replies on WhatsApp."
+            selectedId={selectedWhatsAppId}
+            onSelectId={setSelectedWhatsAppId}
           />
         )}
 
-        {tab === "chats" &&
-          (chatThreads.length === 0 ? (
-            <Card className="p-8 text-center text-sm text-slate-500">
-              No chat conversations yet. Messages appear here when the telecaller chats from the telecaller portal.
-            </Card>
-          ) : (
-            <div className="space-y-4">
-              {chatThreads.map(({ conv, lead, msgs }) => {
-                const profileId = lead?.id || conv.student_id;
-                const profileUrl = leadDetailUrl(profileId, "telecaller", telecaller.id);
-                return (
-                <Card key={conv.id} className="overflow-hidden">
-                  <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-200 px-4 py-3">
-                    <Link to={profileUrl} className="min-w-0 transition hover:opacity-80">
-                      <p className="text-sm font-semibold text-sky-700 hover:underline">
-                        {lead
-                          ? displayName(lead.first_name, lead.last_name, lead.email)
-                          : "Unknown student"}
-                      </p>
-                      <p className="text-xs text-slate-500">
-                        {msgs.length} message{msgs.length === 1 ? "" : "s"}
-                        {conv.last_message_at ? ` · Last ${whenLabel(conv.last_message_at)}` : ""}
-                      </p>
-                    </Link>
-                    <Link to={profileUrl} className="text-xs font-semibold text-sky-600 hover:underline">
-                      View lead profile
-                    </Link>
-                  </div>
-                  <div className="flex max-h-64 flex-col gap-2 overflow-y-auto bg-slate-50 p-4">
-                    {msgs.map((msg) => {
-                      const fromStudent = lead ? studentOwns(lead, msg.sender_id) : false;
-                      return (
-                        <div
-                          key={msg.id}
-                          className={`max-w-[80%] rounded-2xl px-3 py-2 text-sm ${
-                            fromStudent
-                              ? "self-start rounded-bl-sm border border-slate-200 bg-white"
-                              : "self-end rounded-br-sm bg-sky-600 text-white"
-                          }`}
-                        >
-                          <p>{msg.message}</p>
-                          {msg.created_at && (
-                            <p className={`mt-1 text-[10px] ${fromStudent ? "text-slate-400" : "text-white/60"}`}>
-                              {format(new Date(msg.created_at), "PP p")}
-                            </p>
-                          )}
-                        </div>
-                      );
-                    })}
-                  </div>
-                </Card>
-                );
-              })}
-            </div>
-          ))}
+        {tab === "chats" && (
+          <ChatInboxPanel
+            threads={chatInboxThreads}
+            getMessages={getChatMessages}
+            selectedId={selectedChatId}
+            onSelect={setSelectedChatId}
+            emptyListMessage="No chat conversations yet. Messages appear here when the telecaller chats from the telecaller portal."
+            footerNote="Admin view is read-only. The telecaller replies from the telecaller portal."
+            headerNote="Click a lead name on the left to open their chat thread."
+            profileHref={
+              activeChatThread
+                ? leadDetailUrl(activeChatThread.lead?.id || activeChatThread.conv.student_id, "telecaller", telecaller.id)
+                : undefined
+            }
+          />
+        )}
       </div>
     </div>
   );
