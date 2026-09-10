@@ -6494,6 +6494,7 @@ import path from "path";
 import { fileURLToPath } from "url";
 import pg from "pg";
 import { buildCatalogRecords, parseCatalogCsv } from "./csvImport.mjs";
+import { createWhatsAppService } from "./whatsapp.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(__dirname, "..");
@@ -6553,9 +6554,11 @@ const TELECALLER_SIGNUP_CODE = process.env.TELECALLER_SIGNUP_CODE || "";
 // In production, set ADMIN_SIGNUP_OPEN=true or ADMIN_SIGNUP_CODE to allow new admin accounts.
 const ADMIN_SIGNUP_OPEN = String(process.env.ADMIN_SIGNUP_OPEN || "").toLowerCase() === "true";
 const ADMIN_SIGNUP_CODE = process.env.ADMIN_SIGNUP_CODE || "";
-const WHATSAPP_VERIFY_TOKEN = process.env.WHATSAPP_VERIFY_TOKEN || "";
-const WHATSAPP_ACCESS_TOKEN = process.env.WHATSAPP_ACCESS_TOKEN || "";
+const WHATSAPP_VERIFY_TOKEN =
+  process.env.WHATSAPP_WEBHOOK_VERIFY_TOKEN || process.env.WHATSAPP_VERIFY_TOKEN || "";
+const WHATSAPP_ACCESS_TOKEN = process.env.WHATSAPP_API_KEY || process.env.WHATSAPP_ACCESS_TOKEN || "";
 const WHATSAPP_PHONE_NUMBER_ID = process.env.WHATSAPP_PHONE_NUMBER_ID || "";
+const WHATSAPP_OTP_TEMPLATE_NAME = process.env.WHATSAPP_OTP_TEMPLATE_NAME || "";
 
 const pool = new pg.Pool({
   connectionString: DATABASE_URL,
@@ -6940,6 +6943,8 @@ function requireRole(roles, label) {
 const auth = [session, requireRole(ADMIN_ROLES, "Admin")];
 const telecallerAuth = [session, requireRole(["telecaller"], "Telecaller")];
 const counselorAuth = [session, requireRole(["counselor"], "Counselor")];
+const studentAuth = [session, requireRole(["student"], "Student")];
+const staffChatAuth = [session, requireRole([...ADMIN_ROLES, "counselor", "telecaller"], "Staff")];
 
 function requireSuperAdmin(req, res, next) {
   if (req.user?.role !== "super_admin") {
@@ -7581,6 +7586,8 @@ async function loadState() {
     jsonChatMsgs,
     jsonTcConv,
     jsonTcMsg,
+    jsonWaConv,
+    jsonWaMsg,
     directory,
     counselors,
     users,
@@ -7611,6 +7618,8 @@ async function loadState() {
     jsonTable("chat_messages"),
     jsonTable("telecaller_conversations"),
     jsonTable("telecaller_messages"),
+    jsonTable("whatsapp_conversations"),
+    jsonTable("whatsapp_messages"),
     studentDirectory(),
     loadCounselors(),
     loadUsers(),
@@ -7754,6 +7763,24 @@ async function loadState() {
       message: row.message || "",
       is_read: Boolean(row.is_read),
     })),
+    whatsappConversations: jsonWaConv.map((row) => ({
+      ...row,
+      id: String(row.id),
+      lead_id: String(row.lead_id || ""),
+      user_id: row.user_id ? String(row.user_id) : "",
+      phone_number: row.phone_number || "",
+      assigned_staff_id: row.assigned_staff_id ? String(row.assigned_staff_id) : "",
+      staff_role: row.staff_role || "",
+    })),
+    whatsappMessages: jsonWaMsg.map((row) => ({
+      ...row,
+      id: String(row.id),
+      conversation_id: String(row.conversation_id),
+      direction: row.direction || "inbound",
+      body: row.body || "",
+      staff_id: row.staff_id ? String(row.staff_id) : "",
+      is_read: Boolean(row.is_read),
+    })),
   };
 }
 
@@ -7778,6 +7805,18 @@ async function notify(userId, title, message, type = "info", actionUrl = "") {
     ).catch(() => {});
   }
 }
+
+const whatsapp = createWhatsAppService({
+  jsonTable,
+  jsonUpsert,
+  notify,
+  config: {
+    accessToken: WHATSAPP_ACCESS_TOKEN,
+    phoneNumberId: WHATSAPP_PHONE_NUMBER_ID,
+    otpTemplateName: WHATSAPP_OTP_TEMPLATE_NAME,
+    verifyToken: WHATSAPP_VERIFY_TOKEN,
+  },
+});
 
 const app = express();
 const ALLOWED_ORIGINS = String(process.env.ALLOWED_ORIGINS || "")
@@ -8007,6 +8046,11 @@ app.get("/api/telecaller/state", telecallerAuth, async (req, res) => {
     ]);
     const myConversations = allConversations.filter((row) => String(row.telecaller_id) === String(req.user.id));
     const myConversationIds = new Set(myConversations.map((row) => String(row.id)));
+    const myWhatsAppConversations = state.whatsappConversations.filter(
+      (row) =>
+        String(row.assigned_staff_id) === String(req.user.id) && row.staff_role === "telecaller",
+    );
+    const myWhatsAppIds = new Set(myWhatsAppConversations.map((row) => String(row.id)));
     res.json({
       leads: mine,
       notifications: state.notifications.filter((row) => String(row.user_id) === String(req.user.id)),
@@ -8018,6 +8062,8 @@ app.get("/api/telecaller/state", telecallerAuth, async (req, res) => {
       })),
       conversations: myConversations,
       messages: allMessages.filter((row) => myConversationIds.has(String(row.conversation_id))),
+      whatsappConversations: myWhatsAppConversations,
+      whatsappMessages: state.whatsappMessages.filter((row) => myWhatsAppIds.has(String(row.conversation_id))),
     });
   } catch (error) {
     res.status(500).json({ error: error.message || "Could not load your leads" });
@@ -8987,79 +9033,125 @@ app.post("/api/notifications/broadcast", auth, async (req, res) => {
   res.json({ ok: true, count: targets.length });
 });
 
-function normalizePhone(value) {
-  return String(value || "").replace(/\D/g, "");
-}
+// ---------------------------------------------------------------------------
+// WhatsApp — OTP verification (student portal) + staff inbox
+// ---------------------------------------------------------------------------
 
-function phonesMatch(left, right) {
-  const a = normalizePhone(left);
-  const b = normalizePhone(right);
-  if (!a || !b) return false;
-  if (a === b) return true;
-  const tail = 10;
-  return a.slice(-tail) === b.slice(-tail);
-}
-
-async function findLeadByPhone(phone) {
-  const leads = await jsonTable("student_leads");
-  return leads.find((row) => phonesMatch(row.phone, phone)) || null;
-}
-
-async function storeIncomingWhatsAppMessage({ from, text, waMessageId }) {
-  const lead = await findLeadByPhone(from);
-  if (!lead) {
-    console.log(`WhatsApp message from unknown number ${from}: ${text.slice(0, 80)}`);
-    return null;
-  }
-
-  const telecallerId = String(lead.assigned_telecaller_id || "");
-  if (!telecallerId) {
-    console.log(`WhatsApp message for lead ${lead.id} with no assigned telecaller`);
-    return null;
-  }
-
-  const studentKey = String(lead.user_id || lead.id);
-  const conversations = await jsonTable("telecaller_conversations");
-  let conversation = conversations.find(
-    (row) =>
-      String(row.telecaller_id) === telecallerId &&
-      (String(row.student_id) === studentKey ||
-        String(row.student_id) === String(lead.id) ||
-        String(row.student_id) === String(lead.user_id || "")),
-  );
-
-  const now = new Date().toISOString();
-  if (!conversation) {
-    conversation = await jsonUpsert("telecaller_conversations", {
-      id: crypto.randomUUID(),
-      telecaller_id: telecallerId,
-      student_id: studentKey,
-      created_at: now,
-      last_message_at: now,
+app.post("/api/whatsapp/send-otp", studentAuth, async (req, res) => {
+  try {
+    const result = await whatsapp.sendOtp({
+      userId: req.user.id,
+      phone: req.body.phone,
     });
+    res.json(result);
+  } catch (error) {
+    res.status(error.status || 500).json({ error: error.message || "Could not send verification code" });
   }
+});
 
-  const created = await jsonUpsert("telecaller_messages", {
-    id: crypto.randomUUID(),
-    conversation_id: conversation.id,
-    sender_id: studentKey,
-    receiver_id: telecallerId,
-    message: text,
-    is_read: false,
-    created_at: now,
-    source: "whatsapp",
-    whatsapp_message_id: waMessageId || "",
-  });
-  await jsonUpsert("telecaller_conversations", { ...conversation, last_message_at: now });
-  await notify(
-    telecallerId,
-    "New WhatsApp message",
-    `${lead.first_name || "Lead"} ${lead.last_name || ""}: ${text.slice(0, 140)}`.trim(),
-    "info",
-    `/admin/leads/${lead.id}`,
-  );
-  return created;
-}
+app.post("/api/whatsapp/verify-otp", studentAuth, async (req, res) => {
+  try {
+    const result = await whatsapp.verifyOtp({
+      userId: req.user.id,
+      phone: req.body.phone,
+      code: req.body.code,
+    });
+    res.json(result);
+  } catch (error) {
+    res.status(error.status || 500).json({ error: error.message || "Could not verify code" });
+  }
+});
+
+app.get("/api/whatsapp/verification-status", studentAuth, async (req, res) => {
+  try {
+    res.json(await whatsapp.getVerificationStatus(req.user.id));
+  } catch (error) {
+    res.status(500).json({ error: error.message || "Could not load verification status" });
+  }
+});
+
+app.get("/api/whatsapp/conversations", staffChatAuth, async (req, res) => {
+  try {
+    const counselors = await loadCounselors();
+    const conversations = await whatsapp.filterConversationsForStaff(req.user, counselors);
+    res.json(conversations.sort((a, b) => String(b.last_message_at || "").localeCompare(String(a.last_message_at || ""))));
+  } catch (error) {
+    res.status(500).json({ error: error.message || "Could not load WhatsApp conversations" });
+  }
+});
+
+app.get("/api/whatsapp/conversations/:id/messages", staffChatAuth, async (req, res) => {
+  try {
+    const counselors = await loadCounselors();
+    const conversations = await jsonTable("whatsapp_conversations");
+    const conversation = conversations.find((row) => String(row.id) === String(req.params.id));
+    if (!conversation) return res.status(404).json({ error: "Conversation not found." });
+    if (!whatsapp.staffCanAccessConversation(conversation, req.user, counselors)) {
+      return res.status(403).json({ error: "You cannot view this conversation." });
+    }
+    const messages = (await jsonTable("whatsapp_messages"))
+      .filter((row) => String(row.conversation_id) === String(req.params.id))
+      .sort((a, b) => String(a.created_at).localeCompare(String(b.created_at)));
+    res.json(messages);
+  } catch (error) {
+    res.status(500).json({ error: error.message || "Could not load messages" });
+  }
+});
+
+app.post("/api/whatsapp/messages", staffChatAuth, async (req, res) => {
+  try {
+    const conversationId = String(req.body.conversationId || "");
+    const body = String(req.body.message || req.body.body || "").trim();
+    if (!conversationId || !body) {
+      return res.status(400).json({ error: "Conversation and message are required." });
+    }
+
+    const counselors = await loadCounselors();
+    const conversations = await jsonTable("whatsapp_conversations");
+    const conversation = conversations.find((row) => String(row.id) === conversationId);
+    if (!conversation) return res.status(404).json({ error: "Conversation not found." });
+    if (!whatsapp.staffCanAccessConversation(conversation, req.user, counselors)) {
+      return res.status(403).json({ error: "You cannot reply in this conversation." });
+    }
+
+    const waMessageId = await whatsapp.sendTextMessage(conversation.phone_number, body);
+    const created = await whatsapp.storeOutboundMessage({
+      conversationId,
+      body,
+      staffId: req.user.id,
+      waMessageId,
+    });
+    res.json(created);
+  } catch (error) {
+    res.status(error.status || 500).json({ error: error.message || "Could not send WhatsApp message" });
+  }
+});
+
+app.post("/api/whatsapp/conversations/:id/read", staffChatAuth, async (req, res) => {
+  try {
+    const counselors = await loadCounselors();
+    const conversations = await jsonTable("whatsapp_conversations");
+    const conversation = conversations.find((row) => String(row.id) === String(req.params.id));
+    if (!conversation) return res.status(404).json({ error: "Conversation not found." });
+    if (!whatsapp.staffCanAccessConversation(conversation, req.user, counselors)) {
+      return res.status(403).json({ error: "You cannot update this conversation." });
+    }
+
+    const messages = await jsonTable("whatsapp_messages");
+    const unread = messages.filter(
+      (row) =>
+        String(row.conversation_id) === String(req.params.id) &&
+        row.direction === "inbound" &&
+        !row.is_read,
+    );
+    for (const row of unread) {
+      await jsonUpsert("whatsapp_messages", { ...row, is_read: true });
+    }
+    res.json({ ok: true, count: unread.length });
+  } catch (error) {
+    res.status(500).json({ error: error.message || "Could not mark messages read" });
+  }
+});
 
 // Meta WhatsApp Cloud API webhook — GET verifies the callback URL during setup.
 app.get("/api/whatsapp/webhook", (req, res) => {
@@ -9093,7 +9185,7 @@ app.post("/api/whatsapp/webhook", async (req, res) => {
           if (message.type !== "text") continue;
           const text = String(message.text?.body || "").trim();
           if (!text) continue;
-          await storeIncomingWhatsAppMessage({
+          await whatsapp.storeInboundMessage({
             from: message.from,
             text,
             waMessageId: message.id,

@@ -517,6 +517,7 @@ import Applications from "@/admin/Applications";
 import Shortlists from "@/admin/Shortlists";
 import ChatMonitor from "@/admin/ChatMonitor";
 import AiChat from "@/admin/AiChat";
+import WhatsAppChat from "@/admin/WhatsAppChat";
 import UsersPage from "@/admin/Users";
 import HR from "@/admin/HR";
 import Universities from "@/admin/Universities";
@@ -579,6 +580,7 @@ export default function App() {
               <Route path="applications" element={<Applications />} />
               <Route path="shortlists" element={<Shortlists />} />
               <Route path="chat" element={<ChatMonitor />} />
+              <Route path="whatsapp" element={<WhatsAppChat />} />
               <Route path="ai-chat" element={<AiChat />} />
               <Route path="users" element={<UsersPage />} />
               <Route path="counselors" element={<CounselorsHub />} />

@@ -14,6 +14,8 @@ const empty: AdminState = {
   messages: [],
   telecallerConversations: [],
   telecallerMessages: [],
+  whatsappConversations: [],
+  whatsappMessages: [],
   leave: [],
   attendance: [],
   salary: [],

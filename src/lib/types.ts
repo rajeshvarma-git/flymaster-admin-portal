@@ -52,6 +52,9 @@ export interface Lead {
   last_name: string;
   email: string;
   phone: string;
+  whatsapp_number?: string;
+  whatsapp_verified?: boolean;
+  whatsapp_verified_at?: string | null;
   field_of_interest: string;
   academic_score: string;
   preferred_countries: string[];
@@ -132,6 +135,30 @@ export interface TelecallerMessageRow {
   sender_id: string;
   receiver_id: string;
   message: string;
+  is_read: boolean;
+  created_at: string;
+  source?: "portal" | "whatsapp";
+  whatsapp_message_id?: string;
+}
+
+export interface WhatsAppConversationRow {
+  id: string;
+  lead_id: string;
+  user_id?: string;
+  phone_number: string;
+  assigned_staff_id?: string;
+  staff_role?: "counselor" | "telecaller" | "admin" | "";
+  last_message_at?: string | null;
+  created_at?: string | null;
+}
+
+export interface WhatsAppMessageRow {
+  id: string;
+  conversation_id: string;
+  direction: "inbound" | "outbound";
+  body: string;
+  wa_message_id?: string;
+  staff_id?: string;
   is_read: boolean;
   created_at: string;
 }
@@ -282,6 +309,8 @@ export interface AdminState {
   messages: MessageRow[];
   telecallerConversations: TelecallerConversationRow[];
   telecallerMessages: TelecallerMessageRow[];
+  whatsappConversations: WhatsAppConversationRow[];
+  whatsappMessages: WhatsAppMessageRow[];
   leave: LeaveRow[];
   attendance: AttendanceRow[];
   salary: SalaryRow[];

@@ -143,6 +143,12 @@ CREATE TABLE IF NOT EXISTS app_records (
 );
 CREATE INDEX IF NOT EXISTS idx_app_records_table ON app_records(table_name);
 
+-- WhatsApp chat (stored in app_records; table_name keys below):
+-- whatsapp_verifications  — OTP codes (hashed), phone + user_id
+-- whatsapp_conversations  — one thread per lead, linked to assigned counselor or telecaller
+-- whatsapp_messages       — inbound/outbound messages with wa_message_id
+-- student_leads JSON also carries whatsapp_number, whatsapp_verified, whatsapp_verified_at
+
 CREATE TABLE IF NOT EXISTS app_storage (
   path TEXT PRIMARY KEY,
   data_url TEXT NOT NULL
