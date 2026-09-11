@@ -7453,6 +7453,88 @@ async function transferCounselorThreads(fromCounselor, toCounselor) {
   }
 }
 
+function leadOwnedByTelecaller(lead, telecallerId) {
+  return String(lead.assigned_telecaller_id || "") === String(telecallerId || "");
+}
+
+function isOpenLeadRecord(lead) {
+  return lead.entity_type !== "student" && lead.lead_status !== "converted";
+}
+
+async function transferTelecallerThreads(fromTelecallerId, toTelecallerId) {
+  const convs = await jsonTable("telecaller_conversations");
+  for (const conv of convs) {
+    if (String(conv.telecaller_id) === String(fromTelecallerId)) {
+      await jsonUpsert("telecaller_conversations", { ...conv, telecaller_id: String(toTelecallerId) });
+    }
+  }
+  if (isUuid(fromTelecallerId) && isUuid(toTelecallerId)) {
+    await pool
+      .query("UPDATE telecaller_conversations SET telecaller_id = $1 WHERE telecaller_id = $2", [
+        toTelecallerId,
+        fromTelecallerId,
+      ])
+      .catch(() => {});
+  }
+}
+
+async function transferTelecallerLeads(fromTelecallerId, toTelecallerId) {
+  const users = await loadUsers();
+  const from = users.find((row) => row.id === fromTelecallerId && row.role === "telecaller");
+  const to = users.find((row) => row.id === toTelecallerId && row.role === "telecaller");
+  if (!from) throw new Error("Telecaller not found.");
+  if (!to) throw new Error("Target telecaller not found.");
+  if (from.id === to.id) throw new Error("Choose a different telecaller to transfer to.");
+  if (to.is_active === false) throw new Error("Target telecaller is not active.");
+
+  const leads = await jsonTable("student_leads");
+  let count = 0;
+  for (const lead of leads) {
+    if (!isOpenLeadRecord(lead) || !leadOwnedByTelecaller(lead, from.id)) continue;
+    const before = { ...lead };
+    const updated = await applyLeadPatch(lead.id, {
+      assigned_telecaller_id: to.id,
+      status: "assigned",
+    });
+    await syncOwnershipOnAssignment(before, updated);
+    count += 1;
+  }
+  await transferTelecallerThreads(from.id, to.id);
+  return count;
+}
+
+async function deactivateTelecaller(telecallerId) {
+  const users = await loadUsers();
+  const telecaller = users.find((row) => row.id === telecallerId && row.role === "telecaller");
+  if (!telecaller) throw new Error("Telecaller not found.");
+
+  const profiles = await jsonTable("profiles");
+  let updated = false;
+  for (const profile of profiles) {
+    if (String(profile.user_id) === String(telecaller.id)) {
+      await jsonUpsert("profiles", {
+        ...profile,
+        is_active: false,
+        updated_at: new Date().toISOString(),
+      });
+      updated = true;
+    }
+  }
+  if (!updated) {
+    await jsonUpsert("profiles", {
+      id: `profile-${telecaller.id}`,
+      user_id: String(telecaller.id),
+      first_name: telecaller.first_name || "",
+      last_name: telecaller.last_name || "",
+      phone: telecaller.phone || "",
+      is_active: false,
+      updated_at: new Date().toISOString(),
+    });
+  }
+
+  return telecaller;
+}
+
 async function transferCounselorStudents(fromCounselorId, toCounselorId) {
   const counselors = await loadCounselors();
   const from = counselors.find((row) => row.id === fromCounselorId || row.auth_user_id === fromCounselorId);
@@ -9004,6 +9086,66 @@ app.post("/api/counselors/:id/transfer", auth, async (req, res) => {
     res.json({ ok: true, count });
   } catch (error) {
     res.status(400).json({ error: error.message || "Could not transfer students." });
+  }
+});
+
+app.post("/api/telecallers/:id/transfer", auth, async (req, res) => {
+  try {
+    const targetTelecallerId = String(req.body.targetTelecallerId || "");
+    if (!targetTelecallerId) {
+      return res.status(400).json({ error: "Choose a telecaller to transfer leads to." });
+    }
+    const count = await transferTelecallerLeads(req.params.id, targetTelecallerId);
+    if (count > 0) {
+      await notify(
+        targetTelecallerId,
+        "Leads transferred",
+        `${count} open lead(s) were transferred to you with full chat history.`,
+        "info",
+        "/telecaller/leads",
+      );
+    }
+    res.json({ ok: true, count });
+  } catch (error) {
+    res.status(400).json({ error: error.message || "Could not transfer leads." });
+  }
+});
+
+app.post("/api/telecallers/:id/remove", auth, async (req, res) => {
+  try {
+    const users = await loadUsers();
+    const telecaller = users.find((row) => row.id === req.params.id && row.role === "telecaller");
+    if (!telecaller) return res.status(404).json({ error: "Telecaller not found." });
+
+    const targetTelecallerId = req.body.targetTelecallerId ? String(req.body.targetTelecallerId) : "";
+    const assigned = (await jsonTable("student_leads")).filter(
+      (lead) => isOpenLeadRecord(lead) && leadOwnedByTelecaller(lead, telecaller.id),
+    );
+
+    if (assigned.length > 0 && !targetTelecallerId) {
+      return res.status(400).json({
+        error: `${assigned.length} open lead(s) still assigned. Pick a telecaller to transfer them to, then remove.`,
+      });
+    }
+
+    let transferred = 0;
+    if (targetTelecallerId && assigned.length > 0) {
+      transferred = await transferTelecallerLeads(req.params.id, targetTelecallerId);
+      if (transferred > 0) {
+        await notify(
+          targetTelecallerId,
+          "Leads transferred",
+          `${transferred} open lead(s) were transferred to you before the previous telecaller was removed.`,
+          "info",
+          "/telecaller/leads",
+        );
+      }
+    }
+
+    await deactivateTelecaller(req.params.id);
+    res.json({ ok: true, transferred });
+  } catch (error) {
+    res.status(400).json({ error: error.message || "Could not remove telecaller." });
   }
 });
 
